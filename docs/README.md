@@ -1,0 +1,35 @@
+# codeflow design docs
+
+Status: **draft for review**. No implementation has started.
+
+| Document | What it answers |
+| --- | --- |
+| [`goal-and-requirements.md`](goal-and-requirements.md) | What codeflow is, who it serves, the L1 boundary, non-goals, success metrics, failure modes |
+| [`architecture.md`](architecture.md) | Topology, ownership, module map, numbered decisions, invariants, state machine, trust, evidence, safety, testing |
+| [`contracts.md`](contracts.md) | The JSON wire: envelope, exit codes, errors, and every artifact schema |
+| [`DESIGN.md`](DESIGN.md) | The readable integrated design: flow, commands, artifacts, plugin surface, implementation order |
+
+## Reading order
+
+1. `goal-and-requirements.md` — confirm the product boundary.
+2. `architecture.md` — confirm the decisions and invariants.
+3. `contracts.md` — confirm the CLI surface and schemas.
+4. `DESIGN.md` — confirm the whole design and the implementation order.
+
+## Review gates
+
+Implementation starts only after these are accepted:
+
+- [ ] Goal, audience, and non-goals.
+- [ ] L1 boundary and human gates.
+- [ ] Trust model (explicit, config-hash-bound).
+- [ ] Evidence freshness (tree-based, rebase-safe).
+- [ ] Command surface and JSON contracts.
+- [ ] Artifact layout and state machine.
+- [ ] Plugin shell (commands, skill, hook, `bin/`).
+- [ ] Implementation order.
+
+## Design principles in one line
+
+Humans decide; the CLI executes; Claude supplies judgement; evidence is the only proof;
+the base branch is never touched; nothing merges without a human.
