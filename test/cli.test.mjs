@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { run } from "../src/cli.mjs";
 import { capture, cleanup, tempDir, tempRepo } from "./helpers.mjs";
@@ -155,4 +155,118 @@ test("init --dry-run does not write config", async (t) => {
   assert.equal(result.code, 0);
   assert.equal(result.json.data.dryRun, true);
   assert.equal(existsSync(join(dir, ".codeflow/config.json")), false);
+});
+
+const SPEC = [
+  "# Fix login",
+  "",
+  "## Request",
+  "Stop the redirect loop.",
+  "",
+  "## Product",
+  "A user lands on the dashboard after login.",
+  "",
+  "## Design",
+  "Guard the redirect when the token is already present.",
+  "",
+].join("\n");
+
+test("new, approve design, plan, and approve plan form the M2 flow", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+
+  await invoke(["init", "--json"], dir);
+  const created = await invoke(["new", "Fix login", "--json"], dir);
+  assert.equal(created.code, 0);
+  const taskId = created.json.data.taskId;
+  assert.equal(created.json.data.kind, "code");
+  assert.ok(existsSync(join(dir, created.json.data.taskSpecPath)));
+
+  const specPath = join(dir, created.json.data.taskSpecPath);
+  writeFileSync(specPath, SPEC);
+
+  const design = await invoke(["approve", "design", "--json"], dir);
+  assert.equal(design.code, 0);
+  assert.equal(design.json.data.target, "design");
+
+  const planInit = await invoke(["plan", "--init", "--json"], dir);
+  assert.equal(planInit.code, 0);
+  const planFile = join(
+    dir,
+    ".codeflow/state/tasks",
+    taskId,
+    "plan.json",
+  );
+  writeFileSync(
+    planFile,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        taskId,
+        steps: [
+          {
+            id: "1",
+            title: "Add the redirect guard",
+            status: "pending",
+            commitSubject: "fix(auth): add the redirect guard",
+            verification: "`npm test` → pass",
+            summary: "",
+            note: "",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const plan = await invoke(["plan", "--json"], dir);
+  assert.equal(plan.code, 0);
+  assert.equal(plan.json.data.steps, 1);
+
+  const planApproval = await invoke(["approve", "plan", "--json"], dir);
+  assert.equal(planApproval.code, 0);
+
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.code, 0);
+  assert.equal(status.json.data.task.status, "planned");
+  assert.deepEqual(status.json.data.next, ["start"]);
+  assert.equal(status.json.data.approvals.design.stale, false);
+  assert.equal(status.json.data.approvals.plan.stale, false);
+});
+
+test("design approval refuses a template and plan approval refuses a missing design", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+
+  await invoke(["init", "--json"], dir);
+  const created = await invoke(["new", "Fix login", "--json"], dir);
+  assert.equal(created.code, 0);
+
+  const design = await invoke(["approve", "design", "--json"], dir);
+  assert.equal(design.code, 3);
+  assert.equal(design.json.error.code, "E_STATE_CONFLICT");
+
+  const plan = await invoke(["approve", "plan", "--json"], dir);
+  assert.equal(plan.code, 3);
+  assert.equal(plan.json.error.code, "E_STATE_CONFLICT");
+});
+
+test("status reports a stale approval after the task-spec changes", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+
+  await invoke(["init", "--json"], dir);
+  const created = await invoke(["new", "Fix login", "--json"], dir);
+  const specPath = join(dir, created.json.data.taskSpecPath);
+  writeFileSync(specPath, SPEC);
+  assert.equal((await invoke(["approve", "design", "--json"], dir)).code, 0);
+
+  writeFileSync(specPath, `${SPEC}\n## Deferrals\nNone.\n`);
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.code, 0);
+  assert.deepEqual(status.json.data.next, ["approve design"]);
+  assert.ok(
+    status.json.warnings.some((warning) => warning.code === "W_APPROVAL_STALE"),
+  );
 });

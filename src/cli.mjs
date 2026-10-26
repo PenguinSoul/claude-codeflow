@@ -17,6 +17,13 @@ import {
 } from "./config.mjs";
 import { runDoctor } from "./doctor.mjs";
 import { gitOrNull } from "./git.mjs";
+import {
+  planPath,
+  readPlan,
+  validatePlan,
+  writePlanMarkdown,
+  writePlanTemplate,
+} from "./plan.mjs";
 import { render, renderBrief, renderError } from "./render.mjs";
 import { ensureExcluded, findRepo, repoRelative } from "./repo.mjs";
 import {
@@ -25,8 +32,16 @@ import {
   readTask,
   readTrust,
   statePaths,
+  taskDir,
   taskFile,
 } from "./state.mjs";
+import {
+  actor,
+  approvalState,
+  approveTask,
+  createTask,
+  hashFile,
+} from "./task.mjs";
 import { fileExists, readJsonSafe } from "./util.mjs";
 
 const HELP = `codeflow ${CLI_VERSION} — L1 workflow executor
@@ -36,12 +51,20 @@ Usage:
 
 Commands:
   init       Detect the repository and write .codeflow/config.json
+  new        Create a task and a task-spec
+  approve    Approve the design or the plan by hash
+  plan       Validate and render the task plan
   status     Show the active task and next step
   doctor     Check the environment and configuration
 
 Options:
   --json       Print the versioned JSON envelope
   --task <id>  Select a task
+  --kind <k>   Task kind: code, docs, infra, test, mixed
+  --issue <n>  Link an issue (repeatable)
+  --by <who>   Approver identity (default: git user)
+  --note <s>   Approval note
+  --init       Create a starter plan (plan only)
   --brief      One-line status (status only)
   --force      Overwrite an existing config (init only)
   --dry-run    Print side effects without applying them
@@ -57,7 +80,12 @@ function parseArgs(argv) {
     brief: false,
     dryRun: false,
     force: false,
+    init: false,
     task: null,
+    kind: null,
+    issues: [],
+    by: null,
+    note: null,
   };
   const positional = [];
 
@@ -75,6 +103,8 @@ function parseArgs(argv) {
       flags.dryRun = true;
     } else if (arg === "--force") {
       flags.force = true;
+    } else if (arg === "--init") {
+      flags.init = true;
     } else if (arg === "--task") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
@@ -84,6 +114,42 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg.startsWith("--task=")) {
       flags.task = arg.slice("--task=".length);
+    } else if (arg === "--kind") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--kind requires a value");
+      }
+      flags.kind = value;
+      index += 1;
+    } else if (arg.startsWith("--kind=")) {
+      flags.kind = arg.slice("--kind=".length);
+    } else if (arg === "--issue") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--issue requires a value");
+      }
+      flags.issues.push(value);
+      index += 1;
+    } else if (arg.startsWith("--issue=")) {
+      flags.issues.push(arg.slice("--issue=".length));
+    } else if (arg === "--by") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--by requires a value");
+      }
+      flags.by = value;
+      index += 1;
+    } else if (arg.startsWith("--by=")) {
+      flags.by = arg.slice("--by=".length);
+    } else if (arg === "--note") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--note requires a value");
+      }
+      flags.note = value;
+      index += 1;
+    } else if (arg.startsWith("--note=")) {
+      flags.note = arg.slice("--note=".length);
     } else if (arg.startsWith("-")) {
       throw new CodedError(ERROR_CODES.USAGE, `unknown flag "${arg}"`);
     } else {
@@ -189,6 +255,177 @@ function initCommand(repo, flags) {
   };
 }
 
+function newCommand(repo, config, flags, positional) {
+  const title = positional.slice(1).join(" ").trim();
+  if (!title) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "new requires a task title",
+      null,
+      'Example: codeflow new "Fix the login redirect"',
+    );
+  }
+  const paths = statePaths(repo.root, config);
+  const task = createTask(paths, repo, config, {
+    title,
+    kind: flags.kind ?? "code",
+    issues: flags.issues,
+  });
+  return {
+    data: {
+      taskId: task.id,
+      taskPath: repoRelative(repo.root, taskDir(paths, task.id)),
+      taskSpecPath: repoRelative(repo.root, taskFile(paths, task.id, "TASK.md")),
+      kind: task.kind,
+      next: ["edit TASK.md", "approve design"],
+    },
+    taskId: task.id,
+  };
+}
+
+function approveCommand(repo, config, flags, positional) {
+  const target = positional[1];
+  if (!target) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "approve requires a target",
+      null,
+      "Use `codeflow approve design` or `codeflow approve plan`.",
+    );
+  }
+  if (target === "self-review") {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "self-review approval is not available yet",
+      null,
+      "It lands with the delivery milestone.",
+    );
+  }
+  if (target !== "design" && target !== "plan") {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      `unknown approval target "${target}"`,
+      null,
+      "Use `design` or `plan`.",
+    );
+  }
+
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+
+  const by = flags.by ?? actor(repo);
+  const updated = approveTask(paths, task, target, {
+    by,
+    note: flags.note ?? "",
+  });
+  const approval = updated.approvals[target];
+  return {
+    data: {
+      target,
+      hash: approval.hash,
+      approvedBy: approval.approvedBy,
+      approvedAt: approval.approvedAt,
+    },
+    taskId,
+  };
+}
+
+function planCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+
+  if (flags.init) {
+    const created = writePlanTemplate(paths, task);
+    const plan = created ?? readPlan(paths, task.id);
+    writePlanMarkdown(paths, task, plan);
+    return {
+      data: {
+        planPath: repoRelative(repo.root, planPath(paths, task.id)),
+        steps: plan.steps.length,
+        approved: Boolean(task.approvals.plan),
+        next: ["edit plan.json", "approve plan"],
+      },
+      taskId,
+      warnings: created
+        ? []
+        : [
+            {
+              code: "W_PLAN_EXISTS",
+              message: "plan.json already exists; left unchanged",
+            },
+          ],
+    };
+  }
+
+  const plan = readPlan(paths, task.id);
+  const errors = validatePlan(plan, task);
+  if (errors.length > 0) {
+    throw new CodedError(
+      ERROR_CODES.CONFIG,
+      "plan is invalid",
+      { errors },
+      "Edit plan.json, then run `codeflow plan` again.",
+    );
+  }
+  writePlanMarkdown(paths, task, plan);
+
+  const approval = task.approvals.plan;
+  const stale = Boolean(
+    approval && hashFile(planPath(paths, task.id)) !== approval.hash,
+  );
+  return {
+    data: {
+      planPath: repoRelative(repo.root, planPath(paths, task.id)),
+      steps: plan.steps.length,
+      approved: Boolean(approval) && !stale,
+      next: stale || !approval ? ["approve plan"] : ["start"],
+    },
+    taskId,
+    warnings: stale
+      ? [
+          {
+            code: "W_APPROVAL_STALE",
+            message: "plan.json changed since plan approval; approve it again",
+          },
+        ]
+      : [],
+  };
+}
+
 function nextFor(status) {
   const map = {
     created: ["edit TASK.md", "approve design"],
@@ -255,6 +492,23 @@ function statusCommand(repo, config, flags) {
     }
   }
 
+  const approvals = task ? approvalState(paths, task) : null;
+  let next = task ? nextFor(task.status) : ["new"];
+  const warnings = [];
+  if (approvals?.design?.stale) {
+    next = ["approve design"];
+    warnings.push({
+      code: "W_APPROVAL_STALE",
+      message: "TASK.md changed since design approval",
+    });
+  } else if (approvals?.plan?.stale) {
+    next = ["approve plan"];
+    warnings.push({
+      code: "W_APPROVAL_STALE",
+      message: "plan.json changed since plan approval",
+    });
+  }
+
   return {
     data: {
       repo: {
@@ -272,13 +526,15 @@ function statusCommand(repo, config, flags) {
             worktree: task.worktree,
           }
         : null,
-      next: task ? nextFor(task.status) : ["new"],
+      next,
+      approvals,
       trust: { trusted, configHash: hash },
       evidence,
       pr,
       blocked: task?.blocked ?? null,
     },
     taskId,
+    warnings,
   };
 }
 
@@ -323,6 +579,21 @@ export async function run(argv, io = {}) {
     switch (command) {
       case "init": {
         result = initCommand(repo, flags);
+        break;
+      }
+      case "new": {
+        const config = loadConfig(repo.root);
+        result = newCommand(repo, config, flags, positional);
+        break;
+      }
+      case "approve": {
+        const config = loadConfig(repo.root);
+        result = approveCommand(repo, config, flags, positional);
+        break;
+      }
+      case "plan": {
+        const config = loadConfig(repo.root);
+        result = planCommand(repo, config, flags);
         break;
       }
       case "status": {
