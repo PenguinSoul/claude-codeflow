@@ -302,11 +302,12 @@ CI 在 Node 20 和 22 上运行 `npm test` 和 `npm run check`。
 
 ## 贡献
 
-1. 先开 issue，或者描述你实际遇到的问题。
-2. 保持改动聚焦；一个 PR 只解决一个问题。
-3. 运行 `npm test`、`npm run check` 和 `claude plugin validate .`。
-4. 不要加 suppression、弱化测试、跳过人工闸。
-5. 用户可见的 UI 改动请附 before/after 截图。
+- **微小改动**——文档、README、typo、注释、格式、LICENSE、小范围非行为配置——可以直接提交到 `main`，不需要 PR。
+- **行为、契约、依赖、安全、CI 和发布相关改动**——仍然走聚焦的 PR，并完成下面的验证。
+- 一个改动只解决一个问题。
+- 运行 `npm test`、`npm run check` 和 `claude plugin validate .`。
+- 不要加 suppression、弱化测试、跳过人工闸。
+- 用户可见的 UI 改动请附 before/after 截图。
 
 ## 许可证
 

@@ -347,11 +347,15 @@ Known limits:
 
 ## Contributing
 
-1. Open an issue or describe the problem you actually hit.
-2. Keep the change focused; one problem per PR.
-3. Run `npm test`, `npm run check`, and `claude plugin validate .`.
-4. Do not add suppressions, weaken tests, or skip a human gate.
-5. Include before/after screenshots for user-visible UI changes.
+- **Micro changes** — docs, README, typos, comments, formatting, license, and
+  small non-behavioral config — may be committed directly to `main`. No PR is
+  required.
+- **Behavior, contracts, dependencies, security, CI, and release changes** use a
+  focused PR with the verification below.
+- Keep one problem per change.
+- Run `npm test`, `npm run check`, and `claude plugin validate .`.
+- Do not add suppressions, weaken tests, or skip a human gate.
+- Include before/after screenshots for user-visible UI changes.
 
 ## License
 
