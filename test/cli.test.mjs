@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.mjs";
 import { capture, cleanup, tempDir, tempRepo } from "./helpers.mjs";
@@ -398,4 +405,133 @@ test("attention failOn blocks the task", async (t) => {
   assert.equal(status.json.data.task.status, "blocked");
   assert.deepEqual(status.json.data.next, ["resume"]);
   assert.equal(status.json.data.blocked.code, "E_GATE_FAILED");
+});
+
+async function setupPlannedTask(dir, t) {
+  const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-worktrees-"));
+  t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+
+  await invoke(["init", "--json"], dir);
+  const configFile = join(dir, ".codeflow/config.json");
+  const config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.worktreeRoot = worktreeRoot;
+  config.gates = [
+    {
+      name: "test",
+      command: 'node -e "process.exit(0)"',
+      cwd: ".",
+      tier: "fast",
+      kinds: ["code"],
+      required: true,
+      timeoutSec: 30,
+    },
+  ];
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  assert.equal((await invoke(["trust", "--yes", "--json"], dir)).code, 0);
+
+  const created = await invoke(["new", "Fix login", "--json"], dir);
+  const taskId = created.json.data.taskId;
+  writeFileSync(join(dir, created.json.data.taskSpecPath), SPEC);
+  assert.equal((await invoke(["approve", "design", "--json"], dir)).code, 0);
+
+  assert.equal((await invoke(["plan", "--init", "--json"], dir)).code, 0);
+  writeFileSync(
+    join(dir, ".codeflow/state/tasks", taskId, "plan.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        taskId,
+        steps: [
+          {
+            id: "1",
+            title: "Do the work",
+            status: "pending",
+            commitSubject: "feat: do the work",
+            verification: "`npm test` → pass",
+            summary: "",
+            note: "",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  assert.equal((await invoke(["approve", "plan", "--json"], dir)).code, 0);
+
+  const taskFile = join(dir, ".codeflow/state/tasks", taskId, "task.json");
+  const task = JSON.parse(readFileSync(taskFile, "utf8"));
+  return { taskId, taskFile, task, worktree: task.worktree };
+}
+
+test("start creates a worktree and finish removes it", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlannedTask(dir, t);
+
+  const start = await invoke(["start", "--json"], dir);
+  assert.equal(start.code, 0);
+  assert.equal(start.json.data.branch, planned.task.branch);
+  assert.ok(existsSync(planned.worktree));
+
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.json.data.task.status, "active");
+
+  const again = await invoke(["start", "--json"], dir);
+  assert.equal(again.code, 0);
+  assert.ok(
+    again.json.warnings.some((warning) => warning.code === "W_ALREADY_ACTIVE"),
+  );
+
+  const finish = await invoke(["finish", "--confirm", "--json"], dir);
+  assert.equal(finish.code, 0);
+  assert.equal(finish.json.data.removedWorktree, true);
+  assert.equal(existsSync(planned.worktree), false);
+
+  const done = await invoke(["status", "--json"], dir);
+  assert.equal(done.json.data.task.status, "done");
+});
+
+test("resume clears a blocked state", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlannedTask(dir, t);
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+
+  const task = JSON.parse(readFileSync(planned.taskFile, "utf8"));
+  task.status = "blocked";
+  task.blocked = {
+    code: "E_REBASE_CONFLICT",
+    reason: "conflict",
+    from: "active",
+    at: new Date().toISOString(),
+    hint: "resolve",
+  };
+  writeFileSync(planned.taskFile, `${JSON.stringify(task, null, 2)}\n`);
+
+  const resumed = await invoke(["resume", "--json"], dir);
+  assert.equal(resumed.code, 0);
+  assert.equal(resumed.json.data.status, "active");
+  const after = JSON.parse(readFileSync(planned.taskFile, "utf8"));
+  assert.equal(after.status, "active");
+  assert.equal(after.blocked, null);
+});
+
+test("finish refuses a dirty worktree without force", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlannedTask(dir, t);
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  writeFileSync(join(planned.worktree, "dirty.txt"), "dirty\n");
+
+  const refused = await invoke(["finish", "--confirm", "--json"], dir);
+  assert.equal(refused.code, 4);
+  assert.equal(refused.json.error.code, "E_DIRTY_TREE");
+
+  const forced = await invoke(
+    ["finish", "--confirm", "--force", "--json"],
+    dir,
+  );
+  assert.equal(forced.code, 0);
+  assert.equal(existsSync(planned.worktree), false);
 });

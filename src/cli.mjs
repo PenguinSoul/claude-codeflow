@@ -16,7 +16,13 @@ import {
   writeConfig,
 } from "./config.mjs";
 import { runDoctor } from "./doctor.mjs";
-import { gitOrNull } from "./git.mjs";
+import {
+  addWorktree,
+  git,
+  gitOrNull,
+  isClean,
+  removeWorktree,
+} from "./git.mjs";
 import { failedAttention, scanAttention } from "./attention.mjs";
 import {
   buildEvidence,
@@ -33,10 +39,13 @@ import {
 import { render, renderBrief, renderError } from "./render.mjs";
 import { ensureExcluded, findRepo, repoRelative } from "./repo.mjs";
 import {
+  acquireLock,
   ensureState,
+  forceUnlock,
   readActive,
   readTask,
   readTrust,
+  releaseLock,
   statePaths,
   taskDir,
   taskFile,
@@ -65,6 +74,9 @@ Commands:
   plan       Validate and render the task plan
   trust      Review and approve the gate commands
   verify     Run the gates and record evidence
+  start      Create the task branch and worktree
+  resume     Clear a blocked state and continue
+  finish     Remove the worktree after merge
   status     Show the active task and next step
   doctor     Check the environment and configuration
 
@@ -82,8 +94,11 @@ Options:
   --allow-live Permit live gates (verify only)
   --retry      Retry a failing gate once (verify only)
   --init       Create a starter plan (plan only)
+  --confirm    Confirm the merge (finish only)
+  --delete-branch Delete the task branch (finish only)
+  --force-unlock Remove a stale task lock (start/resume/finish)
   --brief      One-line status (status only)
-  --force      Overwrite an existing config (init only)
+  --force      Overwrite config or force cleanup
   --dry-run    Print side effects without applying them
   --help       Show this help
   --version    Show the version
@@ -103,6 +118,9 @@ function parseArgs(argv) {
     live: false,
     allowLive: false,
     retry: false,
+    confirm: false,
+    deleteBranch: false,
+    forceUnlock: false,
     tier: null,
     task: null,
     kind: null,
@@ -138,6 +156,12 @@ function parseArgs(argv) {
       flags.allowLive = true;
     } else if (arg === "--retry") {
       flags.retry = true;
+    } else if (arg === "--confirm") {
+      flags.confirm = true;
+    } else if (arg === "--delete-branch") {
+      flags.deleteBranch = true;
+    } else if (arg === "--force-unlock") {
+      flags.forceUnlock = true;
     } else if (arg === "--tier") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
@@ -675,6 +699,271 @@ function verifyCommand(repo, config, flags) {
   };
 }
 
+function startCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "planned" && task.status !== "active") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; start requires a planned task`,
+      { status: task.status },
+    );
+  }
+
+  const approvals = approvalState(paths, task);
+  if (!approvals.design || approvals.design.stale) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the design is not approved or has changed",
+      { approval: approvals.design },
+      "Run `codeflow approve design` first.",
+    );
+  }
+  if (!approvals.plan || approvals.plan.stale) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the plan is not approved or has changed",
+      { approval: approvals.plan },
+      "Run `codeflow approve plan` first.",
+    );
+  }
+
+  if (flags.dryRun) {
+    return {
+      data: {
+        taskId,
+        branch: task.branch,
+        worktree: task.worktree,
+        base: config.baseBranch,
+        dryRun: true,
+      },
+      taskId,
+    };
+  }
+
+  const wasActive = task.status === "active";
+  acquireLock(paths, task.id, {
+    command: "start",
+    force: flags.forceUnlock,
+  });
+  try {
+    const result = addWorktree(repo.root, {
+      worktree: task.worktree,
+      branch: task.branch,
+      base: config.baseBranch,
+    });
+    task.status = "active";
+    const event = appendEvent(paths, task.id, "task.started", actor(repo), {
+      branch: task.branch,
+      worktree: task.worktree,
+      base: config.baseBranch,
+    });
+    task.lastEventHash = event.hash;
+    writeTask(paths, task);
+
+    const warnings = [];
+    if (wasActive) {
+      warnings.push({
+        code: "W_ALREADY_ACTIVE",
+        message: "the task was already active",
+      });
+    }
+    if (!result.created) {
+      warnings.push({
+        code: "W_WORKTREE_EXISTS",
+        message: "the worktree already exists; reused it",
+      });
+    }
+
+    return {
+      data: {
+        taskId,
+        branch: task.branch,
+        worktree: task.worktree,
+        baseCommit: gitOrNull(
+          ["rev-parse", "--short", config.baseBranch],
+          { cwd: repo.root },
+        ),
+        reused: !result.created,
+        reusedBranch: result.reusedBranch,
+      },
+      taskId,
+      warnings,
+    };
+  } finally {
+    releaseLock(paths, task.id);
+  }
+}
+
+function resumeCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "blocked") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; resume requires a blocked task`,
+      { status: task.status },
+    );
+  }
+
+  const previous = task.blocked?.from ?? "active";
+  acquireLock(paths, task.id, {
+    command: "resume",
+    force: flags.forceUnlock,
+  });
+  try {
+    task.status = previous;
+    task.blocked = null;
+    const event = appendEvent(paths, task.id, "task.resumed", actor(repo), {
+      status: previous,
+    });
+    task.lastEventHash = event.hash;
+    writeTask(paths, task);
+    return {
+      data: {
+        taskId,
+        previousStatus: "blocked",
+        status: previous,
+        next: nextFor(previous),
+      },
+      taskId,
+    };
+  } finally {
+    releaseLock(paths, task.id);
+  }
+}
+
+function finishCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+
+  const mergeConfirmed =
+    task.status === "merged" ||
+    flags.confirm ||
+    (task.status === "pr_open" && flags.confirm);
+  if (!mergeConfirmed && !flags.force) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; finish requires a merged task or --confirm`,
+      { status: task.status },
+      "Merge the PR, then run `codeflow finish --confirm`.",
+    );
+  }
+
+  if (flags.dryRun) {
+    return {
+      data: {
+        taskId,
+        worktree: task.worktree,
+        wouldRemove: Boolean(task.worktree && fileExists(task.worktree)),
+        dryRun: true,
+      },
+      taskId,
+    };
+  }
+
+  acquireLock(paths, task.id, {
+    command: "finish",
+    force: flags.forceUnlock,
+  });
+  try {
+    let removedWorktree = false;
+    if (task.worktree && fileExists(task.worktree)) {
+      if (!isClean(task.worktree) && !flags.force) {
+        throw new CodedError(
+          ERROR_CODES.DIRTY_TREE,
+          "the worktree has uncommitted changes",
+          { worktree: task.worktree },
+          "Commit or discard them, or pass --force.",
+        );
+      }
+      removeWorktree(repo.root, task.worktree, { force: flags.force });
+      removedWorktree = true;
+    }
+
+    let deletedBranch = false;
+    if (flags.deleteBranch && task.branch) {
+      const result = git(["branch", "-D", task.branch], {
+        cwd: repo.root,
+        allowFail: true,
+      });
+      deletedBranch = result !== null;
+    }
+
+    task.status = "done";
+    task.blocked = null;
+    const event = appendEvent(paths, task.id, "task.finished", actor(repo), {
+      removedWorktree,
+      deletedBranch,
+    });
+    task.lastEventHash = event.hash;
+    writeTask(paths, task);
+
+    return {
+      data: {
+        taskId,
+        removedWorktree,
+        deletedBranch,
+        status: "done",
+      },
+      taskId,
+    };
+  } finally {
+    releaseLock(paths, task.id);
+  }
+}
+
 function nextFor(status) {
   const map = {
     created: ["edit TASK.md", "approve design"],
@@ -859,6 +1148,21 @@ export async function run(argv, io = {}) {
       case "verify": {
         const config = loadConfig(repo.root);
         result = verifyCommand(repo, config, flags);
+        break;
+      }
+      case "start": {
+        const config = loadConfig(repo.root);
+        result = startCommand(repo, config, flags);
+        break;
+      }
+      case "resume": {
+        const config = loadConfig(repo.root);
+        result = resumeCommand(repo, config, flags);
+        break;
+      }
+      case "finish": {
+        const config = loadConfig(repo.root);
+        result = finishCommand(repo, config, flags);
         break;
       }
       case "status": {
