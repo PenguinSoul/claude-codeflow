@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { run } from "../src/cli.mjs";
@@ -269,4 +270,132 @@ test("status reports a stale approval after the task-spec changes", async (t) =>
   assert.ok(
     status.json.warnings.some((warning) => warning.code === "W_APPROVAL_STALE"),
   );
+});
+
+async function setupActiveTask(dir, command, options = {}) {
+  const {
+    failOn = [],
+    trust = true,
+  } = options;
+
+  await invoke(["init", "--json"], dir);
+  const configFile = join(dir, ".codeflow/config.json");
+  const config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.gates = [
+    {
+      name: "test",
+      command,
+      cwd: ".",
+      tier: "fast",
+      kinds: ["code"],
+      required: true,
+      timeoutSec: 30,
+    },
+  ];
+  config.attention.failOn = failOn;
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  if (trust) {
+    assert.equal((await invoke(["trust", "--yes", "--json"], dir)).code, 0);
+  }
+
+  const created = await invoke(["new", "Fix login", "--json"], dir);
+  const taskId = created.json.data.taskId;
+  writeFileSync(join(dir, created.json.data.taskSpecPath), SPEC);
+  assert.equal((await invoke(["approve", "design", "--json"], dir)).code, 0);
+
+  assert.equal((await invoke(["plan", "--init", "--json"], dir)).code, 0);
+  writeFileSync(
+    join(dir, ".codeflow/state/tasks", taskId, "plan.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        taskId,
+        steps: [
+          {
+            id: "1",
+            title: "Do the work",
+            status: "pending",
+            commitSubject: "feat: do the work",
+            verification: "`npm test` → pass",
+            summary: "",
+            note: "",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  assert.equal((await invoke(["approve", "plan", "--json"], dir)).code, 0);
+
+  const taskFile = join(dir, ".codeflow/state/tasks", taskId, "task.json");
+  const task = JSON.parse(readFileSync(taskFile, "utf8"));
+  task.status = "active";
+  writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+
+  return { taskId, configFile, taskFile };
+}
+
+test("verify passes, records evidence, and marks the task verified", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const { taskId } = await setupActiveTask(
+    dir,
+    'node -e "process.exit(0)"',
+  );
+
+  const result = await invoke(["verify", "--json"], dir);
+  assert.equal(result.code, 0);
+  assert.equal(result.json.data.result, "pass");
+  assert.ok(existsSync(join(dir, result.json.data.evidencePath)));
+
+  const status = await invoke(["status", "--json", "--task", taskId], dir);
+  assert.equal(status.json.data.task.status, "verified");
+  assert.deepEqual(status.json.data.next, ["self-review", "pr"]);
+});
+
+test("verify refuses an untrusted config", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await setupActiveTask(dir, 'node -e "process.exit(0)"', { trust: false });
+
+  const result = await invoke(["verify", "--json"], dir);
+  assert.equal(result.code, 6);
+  assert.equal(result.json.error.code, "E_TRUST_REQUIRED");
+});
+
+test("a failing required gate exits 1 and records a failed evidence file", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await setupActiveTask(dir, 'node -e "process.exit(1)"');
+
+  const result = await invoke(["verify", "--json"], dir);
+  assert.equal(result.code, 1);
+  assert.equal(result.json.data.result, "fail");
+  const evidence = JSON.parse(
+    readFileSync(join(dir, result.json.data.evidencePath), "utf8"),
+  );
+  assert.equal(evidence.result, "fail");
+});
+
+test("attention failOn blocks the task", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const { taskId } = await setupActiveTask(
+    dir,
+    'node -e "process.exit(0)"',
+    { failOn: ["suppression"] },
+  );
+
+  writeFileSync(join(dir, "auth.ts"), "// @ts-ignore\nexport const a = 1;\n");
+  execFileSync("git", ["add", "-A"], { cwd: dir });
+
+  const result = await invoke(["verify", "--json"], dir);
+  assert.equal(result.code, 1);
+  assert.equal(result.json.data.result, "fail");
+
+  const status = await invoke(["status", "--json", "--task", taskId], dir);
+  assert.equal(status.json.data.task.status, "blocked");
+  assert.deepEqual(status.json.data.next, ["resume"]);
+  assert.equal(status.json.data.blocked.code, "E_GATE_FAILED");
 });

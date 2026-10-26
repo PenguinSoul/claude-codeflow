@@ -17,6 +17,12 @@ import {
 } from "./config.mjs";
 import { runDoctor } from "./doctor.mjs";
 import { gitOrNull } from "./git.mjs";
+import { failedAttention, scanAttention } from "./attention.mjs";
+import {
+  buildEvidence,
+  writeEvidence,
+} from "./evidence.mjs";
+import { runGates, selectGates } from "./gates.mjs";
 import {
   planPath,
   readPlan,
@@ -34,15 +40,18 @@ import {
   statePaths,
   taskDir,
   taskFile,
+  writeTask,
 } from "./state.mjs";
 import {
   actor,
+  appendEvent,
   approvalState,
   approveTask,
   createTask,
   hashFile,
 } from "./task.mjs";
-import { fileExists, readJsonSafe } from "./util.mjs";
+import { assertTrusted, commandsFor, trustConfig } from "./trust.mjs";
+import { fileExists, nowIso, readJsonSafe } from "./util.mjs";
 
 const HELP = `codeflow ${CLI_VERSION} — L1 workflow executor
 
@@ -54,6 +63,8 @@ Commands:
   new        Create a task and a task-spec
   approve    Approve the design or the plan by hash
   plan       Validate and render the task plan
+  trust      Review and approve the gate commands
+  verify     Run the gates and record evidence
   status     Show the active task and next step
   doctor     Check the environment and configuration
 
@@ -64,6 +75,12 @@ Options:
   --issue <n>  Link an issue (repeatable)
   --by <who>   Approver identity (default: git user)
   --note <s>   Approval note
+  --yes        Confirm trust (trust only)
+  --tier <t>   Gate tier: fast, full, live (verify only)
+  --full       Run fast and full gates (verify only)
+  --live       Run fast, full, and live gates (verify only)
+  --allow-live Permit live gates (verify only)
+  --retry      Retry a failing gate once (verify only)
   --init       Create a starter plan (plan only)
   --brief      One-line status (status only)
   --force      Overwrite an existing config (init only)
@@ -81,6 +98,12 @@ function parseArgs(argv) {
     dryRun: false,
     force: false,
     init: false,
+    yes: false,
+    full: false,
+    live: false,
+    allowLive: false,
+    retry: false,
+    tier: null,
     task: null,
     kind: null,
     issues: [],
@@ -105,6 +128,25 @@ function parseArgs(argv) {
       flags.force = true;
     } else if (arg === "--init") {
       flags.init = true;
+    } else if (arg === "--yes") {
+      flags.yes = true;
+    } else if (arg === "--full") {
+      flags.full = true;
+    } else if (arg === "--live") {
+      flags.live = true;
+    } else if (arg === "--allow-live") {
+      flags.allowLive = true;
+    } else if (arg === "--retry") {
+      flags.retry = true;
+    } else if (arg === "--tier") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--tier requires a value");
+      }
+      flags.tier = value;
+      index += 1;
+    } else if (arg.startsWith("--tier=")) {
+      flags.tier = arg.slice("--tier=".length);
     } else if (arg === "--task") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
@@ -426,6 +468,213 @@ function planCommand(repo, config, flags) {
   };
 }
 
+function trustCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const commands = commandsFor(config);
+  if (!flags.yes) {
+    return {
+      data: {
+        configHash: configHash(config),
+        commands,
+        trusted: false,
+        requiresConfirmation: true,
+      },
+      warnings: [
+        {
+          code: "W_TRUST_CONFIRM",
+          message: "Review the commands, then run `codeflow trust --yes`.",
+        },
+      ],
+    };
+  }
+  const trust = trustConfig(paths, config, flags.by ?? actor(repo));
+  return {
+    data: {
+      configHash: trust.configHash,
+      commands: trust.commands,
+      approvedBy: trust.approvedBy,
+      approvedAt: trust.approvedAt,
+    },
+    warnings:
+      commands.length === 0
+        ? [{ code: "W_NO_GATES", message: "the config has no gates" }]
+        : [],
+  };
+}
+
+function verifyCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "active") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; verify requires an active task`,
+      { status: task.status },
+      "Run `codeflow start` first.",
+    );
+  }
+
+  assertTrusted(paths, config);
+
+  const tier = flags.live ? "live" : flags.full ? "full" : (flags.tier ?? "fast");
+  if (!["fast", "full", "live"].includes(tier)) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      `unknown gate tier "${tier}"`,
+      null,
+      "Use fast, full, or live.",
+    );
+  }
+  if (tier === "live" && !flags.allowLive) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "live gates are not allowed without --allow-live",
+      { tier },
+      "Re-run with --allow-live when you intend to spend real tokens.",
+    );
+  }
+
+  const gates = selectGates(config, task.kind, tier);
+  if (gates.length === 0) {
+    throw new CodedError(
+      ERROR_CODES.CONFIG,
+      `no ${tier} gates apply to a ${task.kind} task`,
+      { tier, kind: task.kind },
+      "Edit .codeflow/config.json or choose a different tier.",
+    );
+  }
+
+  if (flags.dryRun) {
+    return {
+      data: {
+        tier,
+        dryRun: true,
+        gates: gates.map((gate) => ({
+          name: gate.name,
+          command: gate.command,
+          tier: gate.tier,
+          required: gate.required,
+        })),
+      },
+      taskId,
+    };
+  }
+
+  const worktree =
+    task.worktree && fileExists(task.worktree) ? task.worktree : repo.root;
+  const startedAt = nowIso();
+  const logDir = path.join(taskDir(paths, task.id), "logs");
+  const run = runGates(gates, {
+    cwd: worktree,
+    logDir,
+    retryFlaky: flags.retry || config.verify.retryFlaky,
+    maxRetries: config.verify.maxRetries,
+  });
+  const attention = scanAttention(worktree, config.baseBranch, config);
+  const failed = failedAttention(attention, config.attention.failOn);
+  const result = run.result === "pass" && failed.length === 0 ? "pass" : "fail";
+
+  const evidence = buildEvidence({
+    root: repo.root,
+    cwd: worktree,
+    task,
+    config,
+    gates,
+    gateResults: run.results,
+    attention,
+    startedAt,
+    finishedAt: nowIso(),
+    result,
+  });
+  writeEvidence(paths, task, evidence);
+
+  const noted = failedAttention(attention, [
+    "test",
+    "skip",
+    "suppression",
+    "config",
+    "lockfile",
+    "large-diff",
+  ]);
+
+  let next;
+  if (result === "pass") {
+    task.status = "verified";
+    task.blocked = null;
+    next = ["self-review", "pr"];
+  } else if (failed.length > 0) {
+    task.status = "blocked";
+    task.blocked = {
+      code: "E_GATE_FAILED",
+      reason: `attention: ${failed.join(", ")}`,
+      at: nowIso(),
+      from: "active",
+      hint: "Review the attention items, fix them, then run `codeflow resume`.",
+    };
+    next = ["resume"];
+  } else {
+    task.status = "active";
+    next = ["fix the failure", "verify"];
+  }
+
+  const event = appendEvent(paths, task.id, "verify.finished", actor(repo), {
+    result,
+    failed,
+    tier,
+  });
+  task.lastEventHash = event.hash;
+  writeTask(paths, task);
+
+  return {
+    data: {
+      result,
+      tier,
+      gates: run.results.map((gate) => ({
+        name: gate.name,
+        exitCode: gate.exitCode,
+        durationMs: gate.durationMs,
+        required: gate.required,
+        timedOut: gate.timedOut,
+        flaky: gate.flaky,
+      })),
+      attention,
+      evidencePath: repoRelative(
+        repo.root,
+        taskFile(paths, task.id, "evidence.json"),
+      ),
+      next,
+    },
+    taskId,
+    warnings:
+      noted.length > 0
+        ? [
+            {
+              code: "W_ATTENTION",
+              message: `attention items recorded: ${noted.join(", ")}`,
+            },
+          ]
+        : [],
+    exitCode: result === "pass" ? EXIT.OK : EXIT.GATE,
+  };
+}
+
 function nextFor(status) {
   const map = {
     created: ["edit TASK.md", "approve design"],
@@ -473,7 +722,13 @@ function statusCommand(repo, config, flags) {
         result: value.result,
         treeHash: value.treeHash,
         finishedAt: value.finishedAt,
-        fresh: Boolean(tree && value.treeHash === `git:${tree}`),
+        fresh: Boolean(
+          value.result === "pass" &&
+            value.dirty === false &&
+            tree &&
+            value.treeHash === `git:${tree}` &&
+            value.configHash === hash,
+        ),
       };
     }
   }
@@ -596,6 +851,16 @@ export async function run(argv, io = {}) {
         result = planCommand(repo, config, flags);
         break;
       }
+      case "trust": {
+        const config = loadConfig(repo.root);
+        result = trustCommand(repo, config, flags);
+        break;
+      }
+      case "verify": {
+        const config = loadConfig(repo.root);
+        result = verifyCommand(repo, config, flags);
+        break;
+      }
       case "status": {
         const config = loadConfig(repo.root);
         result = statusCommand(repo, config, flags);
@@ -631,7 +896,7 @@ export async function run(argv, io = {}) {
       result.warnings ?? [],
     );
     emit(envelope, flags, out, err);
-    return EXIT.OK;
+    return result.exitCode ?? EXIT.OK;
   } catch (error) {
     const coded =
       error instanceof CodedError

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export function tempDir(prefix = "codeflow-test-") {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -39,7 +39,9 @@ export function tempRepo(options = {}) {
     all[lockfile] = "";
   }
   for (const [name, content] of Object.entries(all)) {
-    writeFileSync(join(dir, name), content);
+    const file = join(dir, name);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, content);
   }
 
   git(dir, ["add", "-A"]);
