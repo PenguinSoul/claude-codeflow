@@ -1,0 +1,10 @@
+---
+description: Review and approve the gate commands
+allowed-tools: Bash(codeflow:*), Read
+---
+
+Run `codeflow trust --json` first. It prints every command and the config hash
+without recording trust.
+
+Show the commands to the human and ask for explicit approval. Only after the
+human says yes, run `codeflow trust --yes --json`. Never run `--yes` unprompted.
