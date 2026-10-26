@@ -9,7 +9,8 @@
     "codeflow": "./bin/codeflow"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check": "node scripts/check-syntax.mjs"
   },
   "engines": {
     "node": ">=20"

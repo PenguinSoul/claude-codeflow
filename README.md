@@ -151,7 +151,9 @@ default.
 ## Development
 
 ```bash
-npm test          # node:test, temporary repositories, fake gates and fake gh
+npm test                  # node:test, temporary repositories, fake gates and fake gh
+npm run check             # node --check on every source file
+claude plugin validate .  # manifest, commands, hooks, and marketplace
 ```
 
 Design and contracts live in [`docs/`](docs/):
