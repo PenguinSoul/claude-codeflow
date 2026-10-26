@@ -592,6 +592,7 @@ Human output is a renderer over `data`. No command parses another command's pros
 | `E_GATE_TIMEOUT` | 1 | A gate exceeded its timeout |
 | `E_DIRTY_TREE` | 4 | Operation requires a clean tree |
 | `E_REBASE_CONFLICT` | 4 | Rebase produced conflicts |
+| `E_PUSH_FAILED` | 4 | The task branch could not be pushed |
 | `E_GH_MISSING` | 5 | `gh` is not installed |
 | `E_GH_AUTH` | 5 | `gh` is not authenticated |
 | `E_PR_EXISTS` | 5 | PR already exists and cannot be updated as requested |

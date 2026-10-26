@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -13,11 +14,12 @@ import { join } from "node:path";
 import { run } from "../src/cli.mjs";
 import { capture, cleanup, tempDir, tempRepo } from "./helpers.mjs";
 
-async function invoke(args, cwd) {
+async function invoke(args, cwd, env) {
   const out = capture();
   const err = capture();
   const code = await run(args, {
     cwd,
+    env,
     stdout: out.stream,
     stderr: err.stream,
   });
@@ -535,3 +537,63 @@ test("finish refuses a dirty worktree without force", async (t) => {
   assert.equal(forced.code, 0);
   assert.equal(existsSync(planned.worktree), false);
 });
+
+function fakeGh(t) {
+  const bin = mkdtempSync(join(tmpdir(), "codeflow-gh-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const script = join(bin, "gh");
+  writeFileSync(
+    script,
+    `#!/usr/bin/env bash
+set -e
+if [ "$1" = "--version" ]; then echo "gh version 2.103.2"; exit 0; fi
+if [ "$1" = "auth" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo '[]'; exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/o/r/pull/7"; exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then exit 0; fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","headRefOid":"abc","statusCheckRollup":[{"conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":null}],"mergeStateStatus":"BLOCKED","reviewDecision":""}'
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi
+if [ "$1" = "api" ]; then echo '[]'; exit 0; fi
+echo "unexpected: $*" >&2
+exit 1
+`,
+  );
+  chmodSync(script, 0o755);
+  return { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+}
+
+test("self-review, approve, pr, watch, and comments form the delivery flow", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlannedTask(dir, t);
+  const env = fakeGh(t);
+
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  assert.equal((await invoke(["verify", "--json"], dir)).code, 0);
+  assert.equal((await invoke(["self-review", "--json"], dir)).code, 0);
+  assert.equal(
+    (await invoke(["approve", "self-review", "--json"], dir)).code,
+    0,
+  );
+
+  const pr = await invoke(["pr", "--no-push", "--json"], dir, env);
+  assert.equal(pr.code, 0);
+  assert.equal(pr.json.data.mode, "gh");
+  assert.equal(pr.json.data.number, 7);
+  assert.ok(existsSync(join(dir, ".codeflow/state/tasks", planned.taskId, "pr.json")));
+
+  const watch = await invoke(["watch", "--json"], dir, env);
+  assert.equal(watch.code, 0);
+  assert.equal(watch.json.data.state, "pending");
+
+  const comments = await invoke(["comments", "--json"], dir, env);
+  assert.equal(comments.code, 0);
+  assert.equal(comments.json.data.threads, 0);
+  assert.ok(
+    existsSync(join(dir, ".codeflow/state/tasks", planned.taskId, "COMMENTS.md")),
+  );
+});
+

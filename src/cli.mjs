@@ -26,8 +26,20 @@ import {
 import { failedAttention, scanAttention } from "./attention.mjs";
 import {
   buildEvidence,
+  evidenceHash,
+  gitTreeHash,
+  isDirty,
+  isFresh,
+  readEvidence,
   writeEvidence,
 } from "./evidence.mjs";
+import {
+  compareUrl,
+  createOrUpdatePr,
+  hasGh,
+  readChecks,
+  readComments,
+} from "./github.mjs";
 import { runGates, selectGates } from "./gates.mjs";
 import {
   planPath,
@@ -36,8 +48,17 @@ import {
   writePlanMarkdown,
   writePlanTemplate,
 } from "./plan.mjs";
+import { renderPrBody, titleFor } from "./prbody.mjs";
 import { render, renderBrief, renderError } from "./render.mjs";
 import { ensureExcluded, findRepo, repoRelative } from "./repo.mjs";
+import {
+  approveSelfReview,
+  buildReviewPacket,
+  diffHash,
+  diffStat,
+  readReview,
+  selfReviewFresh,
+} from "./selfreview.mjs";
 import {
   acquireLock,
   ensureState,
@@ -60,7 +81,14 @@ import {
   hashFile,
 } from "./task.mjs";
 import { assertTrusted, commandsFor, trustConfig } from "./trust.mjs";
-import { fileExists, nowIso, readJsonSafe } from "./util.mjs";
+import {
+  fileExists,
+  nowIso,
+  readJsonSafe,
+  readText,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./util.mjs";
 
 const HELP = `codeflow ${CLI_VERSION} — L1 workflow executor
 
@@ -77,6 +105,10 @@ Commands:
   start      Create the task branch and worktree
   resume     Clear a blocked state and continue
   finish     Remove the worktree after merge
+  self-review Build the self-review packet
+  pr         Render the PR body and create/update the PR
+  watch      Read the PR checks (read-only)
+  comments   Read the review comments (read-only)
   status     Show the active task and next step
   doctor     Check the environment and configuration
 
@@ -97,6 +129,10 @@ Options:
   --confirm    Confirm the merge (finish only)
   --delete-branch Delete the task branch (finish only)
   --force-unlock Remove a stale task lock (start/resume/finish)
+  --no-push    Render the PR without pushing (pr only)
+  --scope-drift <s> Record scope drift (self-review, repeatable)
+  --closest-look <s> Record a closest-look area (self-review, repeatable)
+  --wait       Wait for checks (watch only)
   --brief      One-line status (status only)
   --force      Overwrite config or force cleanup
   --dry-run    Print side effects without applying them
@@ -121,6 +157,10 @@ function parseArgs(argv) {
     confirm: false,
     deleteBranch: false,
     forceUnlock: false,
+    noPush: false,
+    wait: false,
+    scopeDrift: [],
+    closestLook: [],
     tier: null,
     task: null,
     kind: null,
@@ -162,6 +202,28 @@ function parseArgs(argv) {
       flags.deleteBranch = true;
     } else if (arg === "--force-unlock") {
       flags.forceUnlock = true;
+    } else if (arg === "--no-push") {
+      flags.noPush = true;
+    } else if (arg === "--wait") {
+      flags.wait = true;
+    } else if (arg === "--scope-drift") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--scope-drift requires a value");
+      }
+      flags.scopeDrift.push(value);
+      index += 1;
+    } else if (arg.startsWith("--scope-drift=")) {
+      flags.scopeDrift.push(arg.slice("--scope-drift=".length));
+    } else if (arg === "--closest-look") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--closest-look requires a value");
+      }
+      flags.closestLook.push(value);
+      index += 1;
+    } else if (arg.startsWith("--closest-look=")) {
+      flags.closestLook.push(arg.slice("--closest-look=".length));
     } else if (arg === "--tier") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
@@ -359,20 +421,12 @@ function approveCommand(repo, config, flags, positional) {
       "Use `codeflow approve design` or `codeflow approve plan`.",
     );
   }
-  if (target === "self-review") {
-    throw new CodedError(
-      ERROR_CODES.USAGE,
-      "self-review approval is not available yet",
-      null,
-      "It lands with the delivery milestone.",
-    );
-  }
-  if (target !== "design" && target !== "plan") {
+  if (target !== "design" && target !== "plan" && target !== "self-review") {
     throw new CodedError(
       ERROR_CODES.USAGE,
       `unknown approval target "${target}"`,
       null,
-      "Use `design` or `plan`.",
+      "Use `design`, `plan`, or `self-review`.",
     );
   }
 
@@ -397,6 +451,28 @@ function approveCommand(repo, config, flags, positional) {
   }
 
   const by = flags.by ?? actor(repo);
+  if (target === "self-review") {
+    const worktree =
+      task.worktree && fileExists(task.worktree) ? task.worktree : repo.root;
+    const { task: updated, review } = approveSelfReview(paths, task, {
+      cwd: worktree,
+      base: config.baseBranch,
+      by,
+      note: flags.note ?? "",
+    });
+    const approval = updated.approvals.selfReview;
+    return {
+      data: {
+        target,
+        hash: approval.hash,
+        approvedBy: approval.approvedBy,
+        approvedAt: approval.approvedAt,
+        notes: review.notes,
+      },
+      taskId,
+    };
+  }
+
   const updated = approveTask(paths, task, target, {
     by,
     note: flags.note ?? "",
@@ -964,6 +1040,422 @@ function finishCommand(repo, config, flags) {
   }
 }
 
+function taskWorktree(repo, task) {
+  return task.worktree && fileExists(task.worktree) ? task.worktree : repo.root;
+}
+
+function selfReviewCommand(repo, config, flags) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "verified") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; self-review requires a verified task`,
+      { status: task.status },
+      "Run `codeflow verify` first.",
+    );
+  }
+  const evidence = readEvidence(paths, task.id);
+  if (!evidence || evidence.result !== "pass") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "passing evidence was not found",
+      { taskId },
+      "Run `codeflow verify` first.",
+    );
+  }
+
+  const worktree = taskWorktree(repo, task);
+  const plan = readPlan(paths, task.id);
+  const review = buildReviewPacket({
+    paths,
+    task,
+    cwd: worktree,
+    base: config.baseBranch,
+    plan,
+    evidence,
+    notes: flags.note ?? "",
+    scopeDrift: flags.scopeDrift,
+    closestLook: flags.closestLook,
+  });
+
+  const counts = {
+    testFiles: review ? evidence.attention.testFiles.length : 0,
+    skips: evidence.attention.skips.length,
+    suppressions: evidence.attention.suppressions.length,
+    configChanges: evidence.attention.configChanges.length,
+    lockfileChanges: evidence.attention.lockfileChanges.length,
+  };
+  return {
+    data: {
+      reviewPath: repoRelative(
+        repo.root,
+        taskFile(paths, task.id, "REVIEW.md"),
+      ),
+      diffHash: review.diffHash,
+      evidenceHash: review.evidenceHash,
+      attention: counts,
+      signed: false,
+      next: ["approve self-review"],
+    },
+    taskId,
+    warnings:
+      counts.skips + counts.suppressions + counts.testFiles > 0
+        ? [
+            {
+              code: "W_ATTENTION",
+              message: "attention items are present in the review packet",
+            },
+          ]
+        : [],
+  };
+}
+
+async function prCommand(repo, config, flags, env) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "verified" && task.status !== "pr_open") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; pr requires a verified task`,
+      { status: task.status },
+      "Run `codeflow verify` and `codeflow approve self-review` first.",
+    );
+  }
+
+  const approvals = approvalState(paths, task);
+  if (!approvals.design || approvals.design.stale) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the design is not approved or has changed",
+      { approval: approvals.design },
+      "Re-approve the design.",
+    );
+  }
+  if (!approvals.plan || approvals.plan.stale) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the plan is not approved or has changed",
+      { approval: approvals.plan },
+      "Re-approve the plan.",
+    );
+  }
+
+  const worktree = taskWorktree(repo, task);
+  const evidence = readEvidence(paths, task.id);
+  if (!evidence) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "evidence.json was not found",
+      { taskId },
+      "Run `codeflow verify` first.",
+    );
+  }
+  const dirty = isDirty(worktree);
+  const tree = gitTreeHash(worktree);
+  const hash = configHash(config);
+  if (
+    !isFresh(evidence, {
+      treeHash: tree,
+      configHash: hash,
+      gateSetHash: evidence.gateSetHash,
+      dirty,
+    })
+  ) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the evidence is missing, stale, or the worktree is dirty",
+      { treeHash: tree, evidenceTree: evidence.treeHash, dirty },
+      "Commit the work, run `codeflow verify`, then retry.",
+    );
+  }
+
+  const self = selfReviewFresh(paths, task, {
+    cwd: worktree,
+    base: config.baseBranch,
+  });
+  if (!self.fresh) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the self-review is missing, stale, or unapproved",
+      { reason: self.reason },
+      "Run `codeflow self-review` and `codeflow approve self-review`.",
+    );
+  }
+
+  const plan = readPlan(paths, task.id);
+  const taskSpec = readText(taskFile(paths, task.id, "TASK.md"));
+  const templateFile = path.resolve(repo.root, config.pr.template);
+  const template = fileExists(templateFile) ? readText(templateFile) : "";
+  const body = renderPrBody({
+    template,
+    task,
+    taskSpec,
+    plan,
+    evidence,
+    config,
+    review: self.review,
+    diffStatText: diffStat(worktree, config.baseBranch),
+  });
+  const bodyPath = taskFile(paths, task.id, "PR_BODY.md");
+  writeTextAtomic(bodyPath, body);
+  const title = titleFor(task, config);
+  const mode = hasGh(env) ? "gh" : "compare";
+
+  if (flags.dryRun) {
+    return {
+      data: {
+        mode,
+        title,
+        bodyPath: repoRelative(repo.root, bodyPath),
+        dryRun: true,
+      },
+      taskId,
+    };
+  }
+
+  if (!flags.noPush) {
+    const remote = config.remote ?? "origin";
+    const pushed = git(["push", "-u", remote, task.branch], {
+      cwd: worktree,
+      allowFail: true,
+    });
+    if (pushed === null) {
+      throw new CodedError(
+        ERROR_CODES.PUSH_FAILED,
+        "the task branch could not be pushed",
+        { remote, branch: task.branch },
+        "Check the remote and your credentials, then retry.",
+      );
+    }
+  }
+
+  let pr;
+  if (mode === "gh") {
+    const created = createOrUpdatePr({
+      cwd: worktree,
+      base: config.baseBranch,
+      branch: task.branch,
+      title,
+      bodyPath,
+      env,
+    });
+    pr = {
+      schemaVersion: 1,
+      taskId: task.id,
+      mode: "gh",
+      number: created.number,
+      url: created.url,
+      state: String(created.state ?? "OPEN").toLowerCase(),
+      title,
+      bodyPath: repoRelative(repo.root, bodyPath),
+      headSha: created.headSha ?? gitOrNull(["rev-parse", "--short", "HEAD"], { cwd: worktree }),
+      baseBranch: config.baseBranch,
+      compareUrl: null,
+      createdAt: nowIso(),
+      lastReadAt: nowIso(),
+      checks: created.checks,
+    };
+  } else {
+    const remoteUrl = gitOrNull(["remote", "get-url", config.remote ?? "origin"], {
+      cwd: repo.root,
+    });
+    pr = {
+      schemaVersion: 1,
+      taskId: task.id,
+      mode: "compare",
+      number: null,
+      url: null,
+      state: "open",
+      title,
+      bodyPath: repoRelative(repo.root, bodyPath),
+      headSha: gitOrNull(["rev-parse", "--short", "HEAD"], { cwd: worktree }),
+      baseBranch: config.baseBranch,
+      compareUrl: compareUrl(remoteUrl, config.baseBranch, task.branch),
+      createdAt: nowIso(),
+      lastReadAt: nowIso(),
+      checks: null,
+    };
+  }
+
+  writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
+  task.status = "pr_open";
+  task.blocked = null;
+  const event = appendEvent(paths, task.id, "pr.created", actor(repo), {
+    mode: pr.mode,
+    number: pr.number,
+    url: pr.url ?? pr.compareUrl,
+  });
+  task.lastEventHash = event.hash;
+  writeTask(paths, task);
+
+  return {
+    data: {
+      mode: pr.mode,
+      number: pr.number,
+      url: pr.url,
+      compareUrl: pr.compareUrl,
+      bodyPath: pr.bodyPath,
+      headSha: pr.headSha,
+      checks: pr.checks,
+    },
+    taskId,
+    warnings:
+      pr.mode === "compare"
+        ? [
+            {
+              code: "W_GH_MISSING",
+              message: "gh is unavailable; pushed a compare URL instead of a PR",
+            },
+          ]
+        : [],
+  };
+}
+
+async function watchCommand(repo, config, flags, env) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(ERROR_CODES.STATE_CONFLICT, "no active task");
+  }
+  const task = readTask(paths, taskId);
+  if (!task || task.status !== "pr_open") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "watch requires an open PR",
+      { status: task?.status ?? null },
+    );
+  }
+  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  if (!pr || pr.mode !== "gh" || !pr.number) {
+    throw new CodedError(
+      ERROR_CODES.GH_MISSING,
+      "no GitHub PR is recorded for this task",
+      { mode: pr?.mode ?? null },
+      "Use the compare URL printed by `codeflow pr`.",
+    );
+  }
+  const worktree = taskWorktree(repo, task);
+  let checks = readChecks(worktree, pr.number, env);
+  let waited = false;
+  if (flags.wait) {
+    const attempts = Number(process.env.CODEFLOW_WATCH_ATTEMPTS ?? 30);
+    const interval = Number(process.env.CODEFLOW_WATCH_INTERVAL_MS ?? 5000);
+    for (let index = 0; index < attempts && checks.state === "pending"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, interval));
+      checks = readChecks(worktree, pr.number, env);
+      waited = true;
+    }
+  }
+  pr.checks = checks;
+  pr.lastReadAt = nowIso();
+  writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
+  return {
+    data: {
+      state: checks.state,
+      checks,
+      lastReadAt: pr.lastReadAt,
+      waited,
+    },
+    taskId,
+  };
+}
+
+function commentsCommand(repo, config, flags, env) {
+  const paths = statePaths(repo.root, config);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(ERROR_CODES.STATE_CONFLICT, "no active task");
+  }
+  const task = readTask(paths, taskId);
+  if (!task || task.status !== "pr_open") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "comments requires an open PR",
+      { status: task?.status ?? null },
+    );
+  }
+  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  if (!pr || pr.mode !== "gh" || !pr.number) {
+    throw new CodedError(
+      ERROR_CODES.GH_MISSING,
+      "no GitHub PR is recorded for this task",
+      { mode: pr?.mode ?? null },
+    );
+  }
+  const worktree = taskWorktree(repo, task);
+  const data = readComments(worktree, pr.number, env);
+  writeJsonAtomic(taskFile(paths, task.id, "comments.json"), data);
+  const lines = [
+    `# Review comments — ${task.id}`,
+    "",
+    `PR: #${pr.number}`,
+    "",
+    "## Reviews",
+    ...(data.reviews.length === 0
+      ? ["- None."]
+      : data.reviews.map(
+          (review) =>
+            `- ${review.author} (${review.state ?? "COMMENTED"}): ${review.body || "(no body)"}`,
+        )),
+    "",
+    "## Inline comments",
+    ...(data.comments.length === 0
+      ? ["- None."]
+      : data.comments.map(
+          (comment) =>
+            `- ${comment.author} at \`${comment.path ?? "?"}:${comment.line ?? "?"}\`: ${comment.body}`,
+        )),
+  ];
+  writeTextAtomic(taskFile(paths, task.id, "COMMENTS.md"), `${lines.join("\n")}\n`);
+  return {
+    data: {
+      threads: data.comments.length,
+      reviews: data.reviews.length,
+      path: repoRelative(repo.root, taskFile(paths, task.id, "COMMENTS.md")),
+      resolved: 0,
+      unresolved: data.comments.length,
+    },
+    taskId,
+  };
+}
+
 function nextFor(status) {
   const map = {
     created: ["edit TASK.md", "approve design"],
@@ -1092,6 +1584,7 @@ export async function run(argv, io = {}) {
   const out = io.stdout ?? process.stdout;
   const err = io.stderr ?? process.stderr;
   const cwd = io.cwd ?? process.cwd();
+  const env = io.env ?? process.env;
 
   let parsed;
   try {
@@ -1163,6 +1656,26 @@ export async function run(argv, io = {}) {
       case "finish": {
         const config = loadConfig(repo.root);
         result = finishCommand(repo, config, flags);
+        break;
+      }
+      case "self-review": {
+        const config = loadConfig(repo.root);
+        result = selfReviewCommand(repo, config, flags);
+        break;
+      }
+      case "pr": {
+        const config = loadConfig(repo.root);
+        result = await prCommand(repo, config, flags, env);
+        break;
+      }
+      case "watch": {
+        const config = loadConfig(repo.root);
+        result = await watchCommand(repo, config, flags, env);
+        break;
+      }
+      case "comments": {
+        const config = loadConfig(repo.root);
+        result = commentsCommand(repo, config, flags, env);
         break;
       }
       case "status": {

@@ -66,6 +66,10 @@ function strippedSections(markdown) {
   );
 }
 
+export function taskSections(markdown) {
+  return strippedSections(markdown);
+}
+
 export function missingTaskSections(markdown) {
   const sections = strippedSections(markdown);
   return ["request", "product", "design"].filter(
