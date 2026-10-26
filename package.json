@@ -1,0 +1,17 @@
+{
+  "name": "codeflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "L1 workflow executor for Claude Code",
+  "license": "MIT",
+  "bin": {
+    "codeflow": "./bin/codeflow"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
