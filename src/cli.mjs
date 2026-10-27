@@ -75,11 +75,12 @@ import {
 } from "./selfreview.mjs";
 import {
   acquireLock,
+  acquireProjectLock,
   ensureState,
-  forceUnlock,
   readActive,
   readTask,
   releaseLock,
+  releaseProjectLock,
   statePaths,
   taskDir,
   taskFile,
@@ -104,6 +105,14 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from "./util.mjs";
+
+const TASK_LOCK_COMMANDS = new Set([
+  "plan",
+  "approve",
+  "verify",
+  "self-review",
+  "pr",
+]);
 
 const COMMANDS = new Set([
   "init",
@@ -165,7 +174,7 @@ Options:
   --result <s> Step result, e.g. "npm test -> pass" (plan step)
   --confirm    Confirm the merge (finish only)
   --delete-branch Delete the task branch (finish only)
-  --force-unlock Remove a stale task lock (start/resume/finish)
+  --force-unlock Remove a stale task or project lock
   --no-push    Render the PR body only; do not push or create a PR (pr only)
   --scope-drift <s> Record scope drift (self-review, repeatable)
   --closest-look <s> Record a closest-look area (self-review, repeatable)
@@ -1871,7 +1880,7 @@ async function watchCommand(repo, config, flags, env) {
       { status: task?.status ?? null },
     );
   }
-  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  let pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
   if (!pr || pr.mode !== "gh" || !pr.number) {
     throw new CodedError(
       ERROR_CODES.GH_MISSING,
@@ -1879,8 +1888,7 @@ async function watchCommand(repo, config, flags, env) {
       { mode: pr?.mode ?? null },
       "Use the compare URL printed by `codeflow pr`.",
     );
-  }
-  const worktree = taskTree(repo, task);
+  }  const worktree = taskTree(repo, task);
   let status = prView(worktree, pr.number, env);
   let checks = status.checks;
   let waited = false;
@@ -1927,12 +1935,21 @@ async function watchCommand(repo, config, flags, env) {
     }
     timedOut = checks.state === "pending" && Date.now() >= deadline;
   }
-  pr.checks = checks;
-  pr.mergeStateStatus = status.mergeStateStatus;
-  pr.reviewDecision = status.reviewDecision;
-  pr.headSha = status.headSha;
-  pr.lastReadAt = nowIso();
-  writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
+  acquireLock(paths, task.id, {
+    command: "watch",
+    force: flags.forceUnlock,
+  });
+  try {
+    pr = readJsonSafe(taskFile(paths, task.id, "pr.json")) ?? pr;
+    pr.checks = checks;
+    pr.mergeStateStatus = status.mergeStateStatus;
+    pr.reviewDecision = status.reviewDecision;
+    pr.headSha = status.headSha;
+    pr.lastReadAt = nowIso();
+    writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
+  } finally {
+    releaseLock(paths, task.id);
+  }
   return {
     data: {
       state: checks.state,
@@ -1982,7 +1999,6 @@ function commentsCommand(repo, config, flags, env) {
   }
   const worktree = taskTree(repo, task);
   const data = readComments(worktree, pr.number, env);
-  writeJsonAtomic(taskFile(paths, task.id, "comments.json"), data);
   const lines = [
     `# Review comments — ${task.id}`,
     "",
@@ -2004,7 +2020,19 @@ function commentsCommand(repo, config, flags, env) {
             `- ${comment.author} at \`${comment.path ?? "?"}:${comment.line ?? "?"}\`: ${comment.body}`,
         )),
   ];
-  writeTextAtomic(taskFile(paths, task.id, "COMMENTS.md"), `${lines.join("\n")}\n`);
+  acquireLock(paths, task.id, {
+    command: "comments",
+    force: flags.forceUnlock,
+  });
+  try {
+    writeJsonAtomic(taskFile(paths, task.id, "comments.json"), data);
+    writeTextAtomic(
+      taskFile(paths, task.id, "COMMENTS.md"),
+      `${lines.join("\n")}\n`,
+    );
+  } finally {
+    releaseLock(paths, task.id);
+  }
   return {
     data: {
       threads: data.comments.length,
@@ -2172,6 +2200,9 @@ export async function run(argv, io = {}) {
 
   const command = positional[0];
   const meta = { repoRoot: null, taskId: flags.task ?? null };
+  let lockPaths = null;
+  let heldTaskLock = null;
+  let heldProjectLock = false;
 
   try {
     if (!COMMANDS.has(command)) {
@@ -2189,6 +2220,7 @@ export async function run(argv, io = {}) {
     let projectConfig = null;
     let configError = null;
     let task = null;
+    let paths = null;
     if (command !== "init") {
       try {
         projectConfig = loadConfig(repo.mainRoot);
@@ -2203,7 +2235,7 @@ export async function run(argv, io = {}) {
         throw configError;
       }
       if (projectConfig) {
-        const paths = statePaths(repo.mainRoot, projectConfig);
+        paths = statePaths(repo.mainRoot, projectConfig);
         const active = readActive(paths);
         const taskId = flags.task ?? active?.taskId ?? null;
         meta.taskId = taskId;
@@ -2216,6 +2248,23 @@ export async function run(argv, io = {}) {
     const config = projectConfig
       ? configForCommand(repo, command, task, projectConfig)
       : null;
+
+    if (paths && task && TASK_LOCK_COMMANDS.has(command)) {
+      acquireLock(paths, task.id, {
+        command,
+        force: flags.forceUnlock,
+      });
+      lockPaths = paths;
+      heldTaskLock = task.id;
+    }
+    if (paths && (command === "new" || command === "trust")) {
+      acquireProjectLock(paths, {
+        command,
+        force: flags.forceUnlock,
+      });
+      lockPaths = paths;
+      heldProjectLock = true;
+    }
 
     let result;
     switch (command) {
@@ -2310,5 +2359,12 @@ export async function run(argv, io = {}) {
     const envelope = fail(command, coded.toJSON(), meta);
     emit(envelope, flags, out, err);
     return exitFor(coded.code);
+  } finally {
+    if (heldTaskLock && lockPaths) {
+      releaseLock(lockPaths, heldTaskLock);
+    }
+    if (heldProjectLock && lockPaths) {
+      releaseProjectLock(lockPaths);
+    }
   }
 }

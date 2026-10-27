@@ -123,6 +123,7 @@ Local, gitignored via `.git/info/exclude`:
 .codeflow/state/
   active.json
   trust.json
+  state.lock
   tasks/<id>/
     task.json
     TASK.md
@@ -137,6 +138,7 @@ Local, gitignored via `.git/info/exclude`:
     comments.json
     COMMENTS.md
     events.jsonl
+    lock
     logs/<gate>.log
 ```
 

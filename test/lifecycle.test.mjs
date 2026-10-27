@@ -12,6 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.mjs";
+import {
+  acquireLock,
+  releaseLock,
+  statePaths,
+} from "../src/state.mjs";
 import { capture, cleanup, fakeGhEnv, tempRepo } from "./helpers.mjs";
 
 const SPEC = [
@@ -484,6 +489,24 @@ test("pr requires a durable updates record", async (t) => {
   assert.equal(result.code, 3);
   assert.equal(result.json.error.code, "E_STATE_CONFLICT");
   assert.match(result.json.error.message, /durable updates/i);
+});
+
+test("verify refuses while the task lock is held", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+  const config = JSON.parse(
+    readFileSync(join(dir, ".codeflow/config.json"), "utf8"),
+  );
+  const paths = statePaths(dir, config);
+
+  acquireLock(paths, planned.taskId, { command: "test" });
+  const blocked = await invoke(["verify", "--json"], dir);
+  assert.equal(blocked.code, 3);
+  assert.equal(blocked.json.error.code, "E_LOCKED");
+
+  releaseLock(paths, planned.taskId);
+  const verified = await invoke(["verify", "--json"], dir);
+  assert.equal(verified.code, 0, verified.err || verified.out);
 });
 
 test("watch --wait polls until checks settle", async (t) => {

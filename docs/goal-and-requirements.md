@@ -153,7 +153,7 @@ Measure after real use, not in the abstract:
 | `gh` missing | Compare-URL fallback; clear diagnostic; no token storage |
 | `gh` installed but unauthenticated | Fail closed with `E_GH_AUTH`; never silently report green |
 | No CI configured | Checks state is `none`, never `success` |
-| Concurrent sessions | Per-task locks on `start`/`resume`/`finish` with stale detection; atomic writes; broader lock coverage is a follow-up |
+| Concurrent sessions | Per-task locks on every mutating command, a project lock for `new`/`trust`, and atomic writes |
 | State corruption after upgrade | Schema version is checked; migrations are a follow-up |
 | Secrets in gate logs | Local-only storage; documented warning; never upload |
 

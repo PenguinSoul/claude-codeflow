@@ -5,10 +5,14 @@ import { defaultConfig } from "../src/config.mjs";
 import { findRepo } from "../src/repo.mjs";
 import {
   acquireLock,
+  acquireProjectLock,
   ensureState,
   lockPath,
+  projectLockPath,
   readLock,
+  readProjectLock,
   releaseLock,
+  releaseProjectLock,
   statePaths,
   writeTask,
 } from "../src/state.mjs";
@@ -40,6 +44,23 @@ test("a task lock is exclusive and releasable", (t) => {
   assert.equal(releaseLock(paths, "2026-10-27-task"), true);
   assert.equal(readLock(paths, "2026-10-27-task"), null);
   assert.equal(acquireLock(paths, "2026-10-27-task", { command: "start" }).command, "start");
+});
+
+test("a project lock is exclusive and releasable", (t) => {
+  const { paths } = setup(t);
+  const lock = acquireProjectLock(paths, { command: "new" });
+
+  assert.equal(lock.pid, process.pid);
+  assert.equal(readProjectLock(paths).command, "new");
+  assert.ok(projectLockPath(paths).endsWith("state.lock"));
+  assert.throws(
+    () => acquireProjectLock(paths, { command: "trust" }),
+    (error) => error.code === "E_LOCKED",
+  );
+
+  assert.equal(releaseProjectLock(paths), true);
+  assert.equal(readProjectLock(paths), null);
+  assert.equal(acquireProjectLock(paths, { command: "trust" }).command, "trust");
 });
 
 test("a dead pid makes a lock stale", (t) => {
