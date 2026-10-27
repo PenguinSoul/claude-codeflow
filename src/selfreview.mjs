@@ -1,6 +1,7 @@
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
 import { evidenceHash, readEvidence } from "./evidence.mjs";
 import { git } from "./git.mjs";
+import { planStateHash, readPlan } from "./plan.mjs";
 import { taskFile, writeTask } from "./state.mjs";
 import { appendEvent } from "./task.mjs";
 import {
@@ -36,9 +37,18 @@ function renderReview(review, context) {
     `Evidence: ${review.evidenceHash}`,
     "",
     "## Plan",
-    ...(plan.steps ?? []).map(
-      (step) => `- [${step.status === "done" ? "x" : " "}] ${step.id}. ${step.title}`,
-    ),
+    ...(plan.steps ?? []).flatMap((step) => {
+      const entries = [
+        `- [${step.status === "done" ? "x" : " "}] ${step.id}. ${step.title}`,
+      ];
+      if (step.summary) {
+        entries.push(`  - ${step.summary}`);
+      }
+      if (step.result) {
+        entries.push(`  - Result: ${step.result}`);
+      }
+      return entries;
+    }),
     "",
     "## Verification",
     "| Gate | Tier | Result | Duration |",
@@ -97,6 +107,7 @@ export function buildReviewPacket(options) {
     taskId: task.id,
     diffHash: diffHash(cwd, base),
     evidenceHash: evidenceHash(evidence),
+    planHash: planStateHash(plan),
     reviewedBy: null,
     reviewedAt: null,
     notes,
@@ -167,6 +178,15 @@ export function approveSelfReview(paths, task, options) {
       "Run `codeflow verify` and `codeflow self-review` again.",
     );
   }
+  const plan = readPlan(paths, task.id);
+  if (review.planHash !== planStateHash(plan)) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the plan changed since the self-review packet was built",
+      { expected: review.planHash, actual: planStateHash(plan) },
+      "Run `codeflow self-review` again.",
+    );
+  }
 
   review.reviewedBy = by;
   review.reviewedAt = nowIso();
@@ -208,6 +228,15 @@ export function selfReviewFresh(paths, task, options) {
   }
   if (review.evidenceHash !== evidenceHash(evidence)) {
     return { review, fresh: false, reason: "evidence changed" };
+  }
+  let plan;
+  try {
+    plan = readPlan(paths, task.id);
+  } catch {
+    return { review, fresh: false, reason: "no plan" };
+  }
+  if (review.planHash !== planStateHash(plan)) {
+    return { review, fresh: false, reason: "plan changed" };
   }
   return { review, fresh: true, reason: null };
 }

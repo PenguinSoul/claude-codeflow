@@ -181,9 +181,18 @@ export function renderPrBody(options) {
   const sections = parseTemplate(text);
   const spec = taskSections(taskSpec);
   const changes = [
-    ...(plan.steps ?? []).map(
-      (step) => `- [${step.status === "done" ? "x" : " "}] ${step.id}. ${step.title}`,
-    ),
+    ...(plan.steps ?? []).flatMap((step) => {
+      const lines = [
+        `- [${step.status === "done" ? "x" : " "}] ${step.id}. ${step.title}`,
+      ];
+      if (step.summary) {
+        lines.push(`  - ${step.summary}`);
+      }
+      if (step.result) {
+        lines.push(`  - Result: ${step.result}`);
+      }
+      return lines;
+    }),
     "",
     "Diff stat:",
     "```text",

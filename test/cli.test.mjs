@@ -291,6 +291,26 @@ test("status reports a stale approval after the task-spec changes", async (t) =>
   );
 });
 
+async function markStepDone(dir, stepId = "1") {
+  const result = await invoke(
+    [
+      "plan",
+      "step",
+      stepId,
+      "--status",
+      "done",
+      "--summary",
+      "Implemented and checked.",
+      "--result",
+      "`npm test` → pass",
+      "--json",
+    ],
+    dir,
+  );
+  assert.equal(result.code, 0, result.err || result.out);
+  return result;
+}
+
 async function setupActiveTask(dir, command, options = {}, t = null) {
   const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-worktrees-"));
   if (t) {
@@ -356,6 +376,7 @@ async function setupActiveTask(dir, command, options = {}, t = null) {
   );
   assert.equal((await invoke(["approve", "plan", "--json"], dir)).code, 0);
   assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  await markStepDone(dir);
 
   const taskFile = join(dir, ".codeflow/state/tasks", taskId, "task.json");
   const task = JSON.parse(readFileSync(taskFile, "utf8"));
@@ -603,6 +624,7 @@ test("self-review, approve, pr, watch, and comments form the delivery flow", asy
   const env = fakeGhEnv(t);
 
   assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  await markStepDone(dir);
   assert.equal((await invoke(["verify", "--json"], dir)).code, 0);
   assert.equal((await invoke(["self-review", "--json"], dir)).code, 0);
   assert.equal(

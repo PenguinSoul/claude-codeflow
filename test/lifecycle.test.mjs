@@ -125,6 +125,22 @@ async function setupPlanned(dir, t) {
 }
 
 async function verifyAndReview(dir) {
+  const step = await invoke(
+    [
+      "plan",
+      "step",
+      "1",
+      "--status",
+      "done",
+      "--summary",
+      "Implemented and checked.",
+      "--result",
+      "`npm test` → pass",
+      "--json",
+    ],
+    dir,
+  );
+  assert.equal(step.code, 0, step.err || step.out);
   const verified = await invoke(["verify", "--json"], dir);
   assert.equal(verified.code, 0, verified.err || verified.out);
   assert.equal((await invoke(["self-review", "--json"], dir)).code, 0);
@@ -349,6 +365,62 @@ test("finish refuses when gh cannot read the PR state", async (t) => {
 
   const task = JSON.parse(readFileSync(delivered.taskFile, "utf8"));
   assert.equal(task.status, "pr_open");
+});
+
+test("plan progress stays approved and pr requires every step done", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+  const env = fakeGhEnv(t, { prState: "OPEN", checks: ["SUCCESS"] });
+
+  assert.equal((await invoke(["verify", "--json"], dir)).code, 0);
+  assert.equal((await invoke(["self-review", "--json"], dir)).code, 0);
+  assert.equal(
+    (await invoke(["approve", "self-review", "--json"], dir)).code,
+    0,
+  );
+
+  const blocked = await invoke(["pr", "--json"], dir, env);
+  assert.equal(blocked.code, 3);
+  assert.equal(blocked.json.error.code, "E_STATE_CONFLICT");
+  assert.equal(blocked.json.error.details.open[0].id, "1");
+
+  const step = await invoke(
+    [
+      "plan",
+      "step",
+      "1",
+      "--status",
+      "done",
+      "--summary",
+      "Implemented and checked.",
+      "--result",
+      "`npm test` → pass",
+      "--json",
+    ],
+    dir,
+  );
+  assert.equal(step.code, 0, step.err || step.out);
+  assert.equal(step.json.data.step.status, "done");
+  assert.equal(step.json.data.next[0], "self-review");
+
+  const staleReview = await invoke(["pr", "--json"], dir, env);
+  assert.equal(staleReview.code, 3);
+  assert.equal(staleReview.json.error.code, "E_APPROVAL_STALE");
+
+  assert.equal((await invoke(["self-review", "--json"], dir)).code, 0);
+  assert.equal(
+    (await invoke(["approve", "self-review", "--json"], dir)).code,
+    0,
+  );
+
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.json.data.task.status, "verified");
+  assert.equal(status.json.data.approvals.plan.stale, false);
+
+  const delivered = await invoke(["pr", "--json"], dir, env);
+  assert.equal(delivered.code, 0, delivered.err || delivered.out);
+  assert.equal(delivered.json.data.number, 7);
+  assert.ok(planned.taskFile);
 });
 
 test("watch --wait polls until checks settle", async (t) => {
