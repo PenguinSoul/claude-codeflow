@@ -16,11 +16,13 @@ export const TIER_GATES = Object.freeze({
 
 export function selectGates(config, kind, tier = "fast") {
   const allowed = TIER_GATES[tier] ?? TIER_GATES.fast;
-  return config.gates.filter(
-    (gate) =>
-      (gate.kinds.length === 0 || gate.kinds.includes(kind)) &&
-      allowed.includes(gate.tier),
-  );
+  return config.gates.filter((gate) => {
+    const matchesKind =
+      kind === "mixed"
+        ? true
+        : gate.kinds.length === 0 || gate.kinds.includes(kind);
+    return matchesKind && allowed.includes(gate.tier);
+  });
 }
 
 export function gateSetHash(gates) {

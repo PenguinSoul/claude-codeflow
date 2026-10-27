@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -25,7 +26,15 @@ const SPEC = [
   "## Design",
   "Guard the redirect when the token is present.",
   "",
+  "## Durable updates",
+  "Not durable — test fixture.",
+  "",
 ].join("\n");
+
+const SPEC_NO_DURABLE = SPEC.replace(
+  /\n## Durable updates\nNot durable — test fixture\.\n/,
+  "\n",
+);
 
 async function invoke(args, cwd, env) {
   const out = capture();
@@ -63,7 +72,8 @@ function repoWithRemote(t) {
   return { dir, bare };
 }
 
-async function setupPlanned(dir, t) {
+async function setupPlanned(dir, t, options = {}) {
+  const { kind = "code", durable = true } = options;
   const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-lifecycle-wt-"));
   t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
 
@@ -87,10 +97,13 @@ async function setupPlanned(dir, t) {
   git(dir, ["commit", "-m", "test: commit codeflow config"]);
   assert.equal((await invoke(["trust", "--yes", "--json"], dir)).code, 0);
 
-  const created = await invoke(["new", "Fix login", "--json"], dir);
+  const created = await invoke(["new", "Fix login", "--kind", kind, "--json"], dir);
   assert.equal(created.code, 0);
   const taskId = created.json.data.taskId;
-  writeFileSync(join(dir, created.json.data.taskSpecPath), SPEC);
+  writeFileSync(
+    join(dir, created.json.data.taskSpecPath),
+    durable ? SPEC : SPEC_NO_DURABLE,
+  );
   assert.equal((await invoke(["approve", "design", "--json"], dir)).code, 0);
 
   assert.equal((await invoke(["plan", "--init", "--json"], dir)).code, 0);
@@ -421,6 +434,56 @@ test("plan progress stays approved and pr requires every step done", async (t) =
   assert.equal(delivered.code, 0, delivered.err || delivered.out);
   assert.equal(delivered.json.data.number, 7);
   assert.ok(planned.taskFile);
+});
+
+test("a docs-only task verifies with no code gate", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t, { kind: "docs" });
+  mkdirSync(join(planned.worktree, "docs"), { recursive: true });
+  writeFileSync(join(planned.worktree, "docs/guide.md"), "# Guide\n");
+  git(planned.worktree, ["add", "docs/guide.md"]);
+  git(planned.worktree, ["commit", "-m", "docs: add a guide"]);
+
+  const verified = await invoke(["verify", "--json"], dir);
+  assert.equal(verified.code, 0, verified.err || verified.out);
+  assert.equal(verified.json.data.result, "pass");
+  assert.equal(verified.json.data.inferredKind, "docs");
+  assert.equal(verified.json.data.effectiveKind, "docs");
+  assert.equal(verified.json.data.gates.length, 0);
+  assert.ok(
+    verified.json.warnings.some((warning) => warning.code === "W_NO_GATES"),
+  );
+});
+
+test("a mixed task runs the broader gate set", async (t) => {
+  const { dir } = repoWithRemote(t);
+  await setupPlanned(dir, t, { kind: "mixed" });
+
+  const verified = await invoke(["verify", "--json"], dir);
+  assert.equal(verified.code, 0, verified.err || verified.out);
+  assert.equal(verified.json.data.result, "pass");
+  assert.equal(verified.json.data.effectiveKind, "mixed");
+  assert.equal(verified.json.data.gates.length, 1);
+  assert.ok(
+    verified.json.warnings.some(
+      (warning) => warning.code === "W_KIND_INFERRED",
+    ),
+  );
+});
+
+test("pr requires a durable updates record", async (t) => {
+  const { dir } = repoWithRemote(t);
+  await setupPlanned(dir, t, { durable: false });
+  await verifyAndReview(dir);
+
+  const result = await invoke(
+    ["pr", "--json"],
+    dir,
+    fakeGhEnv(t, { prState: "OPEN", checks: ["SUCCESS"] }),
+  );
+  assert.equal(result.code, 3);
+  assert.equal(result.json.error.code, "E_STATE_CONFLICT");
+  assert.match(result.json.error.message, /durable updates/i);
 });
 
 test("watch --wait polls until checks settle", async (t) => {

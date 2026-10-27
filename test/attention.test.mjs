@@ -5,11 +5,23 @@ import { join } from "node:path";
 import {
   failedAttention,
   hasAttention,
+  inferKind,
   scanAttention,
 } from "../src/attention.mjs";
 import { defaultConfig } from "../src/config.mjs";
 import { findRepo } from "../src/repo.mjs";
 import { cleanup, git, tempRepo } from "./helpers.mjs";
+
+test("inferKind classifies docs, tests, infra, and mixed", () => {
+  assert.equal(inferKind(["README.md"]), "docs");
+  assert.equal(inferKind(["docs/guide.md"]), "docs");
+  assert.equal(inferKind(["src/a.test.ts"]), "test");
+  assert.equal(inferKind([".github/workflows/ci.yml"]), "infra");
+  assert.equal(inferKind(["package-lock.json"]), "infra");
+  assert.equal(inferKind(["src/a.ts"]), "code");
+  assert.equal(inferKind(["README.md", "src/a.ts"]), "mixed");
+  assert.equal(inferKind([]), "code");
+});
 
 test("scanAttention finds test changes, skips, suppressions, config, and lockfiles", (t) => {
   const dir = tempRepo({

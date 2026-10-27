@@ -32,6 +32,9 @@ const SPEC = [
   "## Design",
   "Guard the redirect when the token is already present.",
   "",
+  "## Durable updates",
+  "Not durable — test fixture.",
+  "",
 ].join("\n");
 
 const PLAN = (taskId) => ({

@@ -77,6 +77,10 @@ export function missingTaskSections(markdown) {
   );
 }
 
+export function durableUpdates(markdown) {
+  return strippedSections(markdown)["durable updates"] ?? "";
+}
+
 export function appendEvent(paths, taskId, type, eventActor, data = {}) {
   const file = taskFile(paths, taskId, "events.jsonl");
   ensureDir(path.dirname(file));
