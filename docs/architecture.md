@@ -81,7 +81,7 @@ All modules are ESM under `src/`. `bin/codeflow` is a thin executable that impor
 | `plan.mjs` | Plan schema, validation, render, step status | `task`, `util`, `contracts` |
 | `git.mjs` | Worktree, branch, rebase, clean, diffstat, tree hash | `util` |
 | `gates.mjs` | Gate selection, execution, timeouts, logs | `config`, `trust`, `util`, `contracts` |
-| `attention.mjs` | Diff scan for risk and scope drift | `git`, `util`, `contracts` |
+| `attention.mjs` | Diff scan for risk and change kind | `git`, `util`, `contracts` |
 | `evidence.mjs` | Build and validate evidence freshness | `git`, `config`, `gates`, `attention`, `util`, `contracts` |
 | `selfreview.mjs` | Review packet and sign-off | `git`, `evidence`, `attention`, `plan`, `util`, `contracts` |
 | `prbody.mjs` | Template parsing and body rendering | `task`, `plan`, `evidence`, `attention`, `util`, `contracts` |
@@ -212,7 +212,8 @@ throw that away.
 
 `TASK.md` lives in the task's local state. Before `pr`, the task must record which
 durable specs, README sections, or ADRs were updated, or explicitly mark the change as
-not durable. The PR body carries that record.
+not durable. `pr` refuses without a non-empty `## Durable updates` record. The PR body
+carries that record in a `## Durable updates` section.
 
 **Why:** otherwise the process looks disciplined while the repository learns nothing;
 the next task re-derives the same decisions.
@@ -223,8 +224,10 @@ repository; a spec graph requirement for every repository.
 ### D11 — The attention scan is a spotlight, not a verdict
 
 `verify` scans the diff for test weakening, skipped tests, suppressions, config and
-lockfile changes, scope drift, and large diffs. It records findings and surfaces them
-in the self-review packet. It does not silently fail the build or silently pass.
+lockfile changes, and large diffs. It records findings and surfaces them in the
+self-review packet. Scope drift and closest-look areas are recorded from explicit
+self-review flags, because intent cannot be inferred from paths alone. The scan does
+not silently fail the build or silently pass.
 
 **Why:** an agent can satisfy a gate by weakening the evidence. A human needs the
 spotlight; an automatic verdict would be both overconfident and easy to game.

@@ -153,6 +153,9 @@ function bodyFor(heading, context) {
   if (name.includes("related issue")) {
     return task.issues.length > 0 ? task.issues.join(", ") : "None.";
   }
+  if (name.includes("durable")) {
+    return spec["durable updates"] || "Not recorded.";
+  }
   if (name.includes("checklist")) {
     return checklistBody(context.originalBody, evidence);
   }
@@ -226,9 +229,17 @@ export function renderPrBody(options) {
     const name = section.heading.toLowerCase();
     return name.includes("testing") || name.includes("verification");
   });
+  const hasDurable = sections.some((section) =>
+    section.heading.toLowerCase().includes("durable"),
+  );
 
   if (!hasVerification) {
     rendered.push(`## Verification\n\n${verification}`);
+  }
+  if (!hasDurable) {
+    rendered.push(
+      `## Durable updates\n\n${spec["durable updates"] || "Not recorded."}`,
+    );
   }
   if (!hasAttention) {
     rendered.push(`## Review attention\n\n${attention}`);

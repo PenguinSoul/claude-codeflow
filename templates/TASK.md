@@ -12,6 +12,10 @@
 
 <!-- The chosen approach, trade-offs, and rejected alternatives. -->
 
+## Durable updates
+
+<!-- Which specs, README sections, or ADRs changed? Or: Not durable — <reason>. -->
+
 ## Deferrals
 
 <!-- Explicitly out of scope. -->

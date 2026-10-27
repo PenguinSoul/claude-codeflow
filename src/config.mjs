@@ -12,7 +12,7 @@ import {
 export const CONFIG_SCHEMA_VERSION = 1;
 
 const GATE_TIERS = new Set(["fast", "full", "live"]);
-const KINDS = new Set(["code", "docs", "infra", "test"]);
+const KINDS = new Set(["code", "docs", "infra", "test", "mixed"]);
 
 export function configPath(root) {
   return path.join(root, ".codeflow", "config.json");

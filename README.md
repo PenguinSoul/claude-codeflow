@@ -97,7 +97,8 @@ Every transition is guarded:
 ## Features
 
 - **Task-spec first.** Every task gets a short `TASK.md` with Request, Product,
-  Design, and Deferrals. The human approves it before code is written.
+  Design, Durable updates, and Deferrals. The human approves it before code is
+  written; `pr` refuses without a durable-updates record.
 - **Commit-sized plans.** `plan.json` carries a title, commit subject, and
   verification line per step. The plan is approved by hash over its immutable
   fields; `plan step` records status, summary, and actual result. `pr` requires
@@ -107,12 +108,16 @@ Every transition is guarded:
   in parallel with per-task locks.
 - **Trust-bound gates.** `init` detects candidate gates; `trust` shows every
   command and binds approval to the config hash. No trust, no execution.
+- **Change-kind inference.** `verify` infers docs, test, infra, or mixed from the
+  diff; a mismatch runs the broader gate set. A docs-only task can verify without a
+  code gate.
 - **Tree-based evidence.** `verify` records command, exit code, duration, logs,
   tree hash, config hash, gate-set hash, and dirty state. A rebase may reuse
   evidence only when the tree is unchanged.
 - **Attention scan.** Test-file changes, skipped tests, suppressions, config and
-  lockfile changes, large diffs, scope drift, and closest-look areas are
-  surfaced for human review. They are a spotlight, not an automatic verdict.
+  lockfile changes, and large diffs are scanned. Scope drift and closest-look areas
+  are recorded from the self-review flags. They are a spotlight, not an automatic
+  verdict.
 - **Self-review packet.** Diff stat, plan status, verification table, attention
   items, scope drift, and closest-look areas in one `REVIEW.md`.
 - **PR fidelity.** The repository's `PULL_REQUEST_TEMPLATE.md` is preserved;
@@ -354,7 +359,7 @@ docs/                     goal, architecture, contracts, design
 ## Development
 
 ```bash
-npm test                  # 103 tests: temporary repos, fake gates, fake gh
+npm test                  # 108 tests: temporary repos, fake gates, fake gh
 npm run check             # node --check on every source file
 claude plugin validate .  # manifest, commands, hooks, marketplace
 ```

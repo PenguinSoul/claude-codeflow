@@ -48,6 +48,14 @@ test("selectGates filters by tier and kind", () => {
     selectGates(config, "docs", "fast").map((entry) => entry.name),
     ["docs"],
   );
+  assert.deepEqual(
+    selectGates(config, "mixed", "fast").map((entry) => entry.name),
+    ["lint", "docs"],
+  );
+  assert.deepEqual(
+    selectGates(config, "mixed", "full").map((entry) => entry.name),
+    ["lint", "e2e", "docs"],
+  );
 });
 
 test("gateSetHash changes when a command changes", () => {

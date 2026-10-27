@@ -57,7 +57,7 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
    separately.
 3. **Start a task.** `/codeflow:new "fix the login redirect"` creates a task and a
    lightweight `TASK.md`. Claude interviews the human, fills Request / Product / Design /
-   Deferrals, and runs `/codeflow:approve design`.
+   Durable updates / Deferrals, and runs `/codeflow:approve design`.
 4. **Plan.** `/codeflow:plan` writes commit-sized steps with a verification line and a
    Conventional Commit subject. The human approves the plan; progress is recorded
    separately.
@@ -66,7 +66,7 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
    Commands work from the project root or the task worktree.
 6. **Verify.** `/codeflow:verify` loads the config from the task worktree, checks trust
    for that exact hash, runs the gates, captures branch-bound evidence, and scans the
-   diff for test weakening, suppressions, config changes, scope drift, and large diffs.
+   diff for test weakening, suppressions, config changes, and large diffs.
    `--full` adds full gates; `--live` needs explicit permission.
 7. **Self-review.** `/codeflow:self-review` shows the packet: diff stat, plan status,
    evidence, attention items, scope drift, closest-look areas.
@@ -187,7 +187,7 @@ clean tree. Rebase may change the commit ID; the tree hash decides freshness.
 self-review hashes the diff and evidence. A change invalidates the approval.
 
 **Attention.** The diff scan surfaces test-file changes, skips, suppressions,
-config/lockfile changes, large diffs, scope drift, and closest-look areas. It is a
+config/lockfile changes, large diffs, and the closest-look areas. It is a
 spotlight for the human, never an automatic verdict.
 
 ## Plugin surface

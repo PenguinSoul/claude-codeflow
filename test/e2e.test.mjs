@@ -48,6 +48,9 @@ const SPEC = [
   "## Design",
   "Guard the redirect when the token is present.",
   "",
+  "## Durable updates",
+  "Not durable — test fixture.",
+  "",
 ].join("\n");
 
 test("the built binary runs the full human-gated flow in a temporary repository", async (t) => {

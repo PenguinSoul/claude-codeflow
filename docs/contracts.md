@@ -294,6 +294,9 @@ Rules:
   "startedAt": "2026-10-26T10:00:00Z",
   "finishedAt": "2026-10-26T10:02:00Z",
   "result": "pass",
+  "kind": "code",
+  "inferredKind": "mixed",
+  "effectiveKind": "mixed",
   "gates": [
     {
       "name": "lint",
@@ -592,6 +595,9 @@ requires a non-empty `--result`.
 ```json
 {
   "result": "pass",
+  "kind": "code",
+  "inferredKind": "mixed",
+  "effectiveKind": "mixed",
   "gates": [
     { "name": "lint", "exitCode": 0, "durationMs": 1200, "required": true }
   ],
@@ -604,6 +610,12 @@ requires a non-empty `--result`.
   "next": ["self-review", "pr"]
 }
 ```
+
+`verify` infers the change kind from the diff. When it differs from `task.kind`, it
+uses the broader `mixed` gate set and returns `W_KIND_INFERRED`. A docs-only task with
+no configured docs gate records zero gates, passes on attention, and returns
+`W_NO_GATES`; a non-docs task with no applicable gate is `E_CONFIG`. Evidence records
+all three kinds.
 
 ### `pr`
 

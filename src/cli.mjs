@@ -25,7 +25,12 @@ import {
   rebaseOntoBase,
   removeWorktree,
 } from "./git.mjs";
-import { failedAttention, scanAttention } from "./attention.mjs";
+import {
+  changedFiles,
+  failedAttention,
+  inferKind,
+  scanAttention,
+} from "./attention.mjs";
 import {
   buildEvidence,
   evidenceHash,
@@ -86,6 +91,7 @@ import {
   approvalState,
   approveTask,
   createTask,
+  durableUpdates,
   hashFile,
 } from "./task.mjs";
 import { assertTrusted, commandsFor, isTrusted, trustConfig } from "./trust.mjs";
@@ -843,14 +849,32 @@ function verifyCommand(repo, config, flags) {
     );
   }
 
-  const gates = selectGates(config, task.kind, tier);
-  if (gates.length === 0) {
+  const worktree = taskTree(repo, task);
+  const inferredKind = inferKind(changedFiles(worktree, config.baseBranch));
+  let effectiveKind = task.kind;
+  const warnings = [];
+  if (inferredKind !== task.kind) {
+    effectiveKind = "mixed";
+    warnings.push({
+      code: "W_KIND_INFERRED",
+      message: `inferred ${inferredKind} from the diff; using the broader gate set for the ${task.kind} task`,
+    });
+  }
+
+  const gates = selectGates(config, effectiveKind, tier);
+  if (gates.length === 0 && effectiveKind !== "docs") {
     throw new CodedError(
       ERROR_CODES.CONFIG,
-      `no ${tier} gates apply to a ${task.kind} task`,
-      { tier, kind: task.kind },
+      `no ${tier} gates apply to a ${effectiveKind} task`,
+      { tier, kind: effectiveKind, inferredKind },
       "Edit .codeflow/config.json or choose a different tier.",
     );
+  }
+  if (gates.length === 0) {
+    warnings.push({
+      code: "W_NO_GATES",
+      message: "no gates apply to a docs-only task",
+    });
   }
 
   if (flags.dryRun) {
@@ -858,6 +882,9 @@ function verifyCommand(repo, config, flags) {
       data: {
         tier,
         dryRun: true,
+        kind: task.kind,
+        inferredKind,
+        effectiveKind,
         gates: gates.map((gate) => ({
           name: gate.name,
           command: gate.command,
@@ -866,10 +893,10 @@ function verifyCommand(repo, config, flags) {
         })),
       },
       taskId,
+      warnings,
     };
   }
 
-  const worktree = taskTree(repo, task);
   const startedAt = nowIso();
   const logDir = path.join(taskDir(paths, task.id), "logs");
   const run = runGates(gates, {
@@ -883,7 +910,7 @@ function verifyCommand(repo, config, flags) {
   const result = run.result === "pass" && failed.length === 0 ? "pass" : "fail";
 
   const evidence = buildEvidence({
-    root: repo.root,
+    root: repo.mainRoot,
     cwd: worktree,
     task,
     config,
@@ -893,6 +920,9 @@ function verifyCommand(repo, config, flags) {
     startedAt,
     finishedAt: nowIso(),
     result,
+    kind: task.kind,
+    inferredKind,
+    effectiveKind,
   });
   writeEvidence(paths, task, evidence);
 
@@ -929,14 +959,28 @@ function verifyCommand(repo, config, flags) {
     result,
     failed,
     tier,
+    kind: task.kind,
+    inferredKind,
+    effectiveKind,
   });
   task.lastEventHash = event.hash;
   writeTask(paths, task);
+
+  const resultWarnings = [...warnings];
+  if (noted.length > 0) {
+    resultWarnings.push({
+      code: "W_ATTENTION",
+      message: `attention items recorded: ${noted.join(", ")}`,
+    });
+  }
 
   return {
     data: {
       result,
       tier,
+      kind: task.kind,
+      inferredKind,
+      effectiveKind,
       gates: run.results.map((gate) => ({
         name: gate.name,
         exitCode: gate.exitCode,
@@ -947,21 +991,13 @@ function verifyCommand(repo, config, flags) {
       })),
       attention,
       evidencePath: repoRelative(
-        repo.root,
+        repo.mainRoot,
         taskFile(paths, task.id, "evidence.json"),
       ),
       next,
     },
     taskId,
-    warnings:
-      noted.length > 0
-        ? [
-            {
-              code: "W_ATTENTION",
-              message: `attention items recorded: ${noted.join(", ")}`,
-            },
-          ]
-        : [],
+    warnings: resultWarnings,
     exitCode: result === "pass" ? EXIT.OK : EXIT.GATE,
   };
 }
@@ -1427,7 +1463,7 @@ function selfReviewCommand(repo, config, flags) {
   return {
     data: {
       reviewPath: repoRelative(
-        repo.root,
+        repo.mainRoot,
         taskFile(paths, task.id, "REVIEW.md"),
       ),
       diffHash: review.diffHash,
@@ -1620,6 +1656,14 @@ async function prCommand(repo, config, flags, env) {
     );
   }
   const taskSpec = readText(taskFile(paths, task.id, "TASK.md"));
+  if (!durableUpdates(taskSpec)) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "TASK.md has no durable updates record",
+      { taskId },
+      "Add a `## Durable updates` section listing the specs, README sections, or ADRs you changed, or write `Not durable — <reason>`.",
+    );
+  }
   const templateFile = path.resolve(worktree, config.pr.template);
   if (!isContained(worktree, templateFile)) {
     throw new CodedError(
