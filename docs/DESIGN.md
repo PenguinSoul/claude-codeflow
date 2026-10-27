@@ -94,7 +94,7 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
 | `codeflow trust` | `/codeflow:trust` | Approve exact gate commands |
 | `codeflow new "<request>"` | `/codeflow:new` | Create task and `TASK.md` |
 | `codeflow approve design\|plan\|self-review` | `/codeflow:approve` | Hash-bound approval |
-| `codeflow plan` | `/codeflow:plan` | Validate and render the step plan |
+| `codeflow plan` | `/codeflow:plan` | Validate, render, and track the step plan |
 | `codeflow start` | `/codeflow:start` | Create branch and worktree |
 | `codeflow verify` | `/codeflow:verify` | Run gates, capture evidence, scan attention |
 | `codeflow self-review` | `/codeflow:self-review` | Build the self-review packet |

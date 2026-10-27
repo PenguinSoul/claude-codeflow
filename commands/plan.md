@@ -10,4 +10,9 @@ and a concrete verification line.
 Run `codeflow plan --json` to validate and render `PLAN.md`. Ask the human to
 review it.
 
+After the plan is approved and the task is active, record progress with
+`codeflow plan step <id> --status done --summary "<what changed>" --result
+"<check → result>" --json`. Do not edit `status`, `summary`, or `result` by hand.
+`pr` refuses while any step is open.
+
 Next: `/codeflow:approve plan`.

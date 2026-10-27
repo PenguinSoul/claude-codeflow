@@ -5,6 +5,8 @@ import {
   isPlainObject,
   readJson,
   readText,
+  sha256,
+  stableStringify,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./util.mjs";
@@ -12,6 +14,25 @@ import {
 const STEP_STATUSES = new Set(["pending", "in_progress", "done", "blocked"]);
 const PLACEHOLDER_TITLE = "Describe the first step";
 const PLACEHOLDER_SUBJECT = "feat: describe the first step";
+
+export function planApprovalHash(plan) {
+  return sha256(
+    stableStringify({
+      schemaVersion: plan.schemaVersion,
+      taskId: plan.taskId,
+      steps: (plan.steps ?? []).map((step) => ({
+        id: step.id,
+        title: step.title,
+        commitSubject: step.commitSubject,
+        verification: step.verification,
+      })),
+    }),
+  );
+}
+
+export function planStateHash(plan) {
+  return sha256(stableStringify(plan));
+}
 
 export function planPath(paths, taskId) {
   return taskFile(paths, taskId, "plan.json");
@@ -48,6 +69,7 @@ export function planTemplate(taskId) {
         status: "pending",
         commitSubject: PLACEHOLDER_SUBJECT,
         verification: "not verified",
+        result: "",
         summary: "",
         note: "",
       },
@@ -116,6 +138,9 @@ export function validatePlan(plan, task) {
     if (step.summary !== undefined && typeof step.summary !== "string") {
       errors.push(`${at}.summary must be a string`);
     }
+    if (step.result !== undefined && typeof step.result !== "string") {
+      errors.push(`${at}.result must be a string`);
+    }
     if (step.note !== undefined && typeof step.note !== "string") {
       errors.push(`${at}.note must be a string`);
     }
@@ -136,6 +161,9 @@ export function renderPlan(plan) {
     lines.push(`- [${marker[step.status] ?? " "}] ${step.id}. ${step.title}`);
     lines.push(`  - Commit: \`${step.commitSubject}\``);
     lines.push(`  - Verification: ${step.verification}`);
+    if (step.result) {
+      lines.push(`  - Result: ${step.result}`);
+    }
     if (step.summary) {
       lines.push(`  - Summary: ${step.summary}`);
     }
@@ -144,6 +172,52 @@ export function renderPlan(plan) {
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function updatePlanStep(plan, id, patch = {}) {
+  const step = (plan.steps ?? []).find((entry) => entry.id === id);
+  if (!step) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `plan step "${id}" was not found`,
+      { stepId: id },
+      "Run `codeflow plan --json` to see the step ids.",
+    );
+  }
+  if (patch.status !== undefined) {
+    if (!STEP_STATUSES.has(patch.status)) {
+      throw new CodedError(
+        ERROR_CODES.USAGE,
+        `unknown step status "${patch.status}"`,
+        null,
+        "Use pending, in_progress, done, or blocked.",
+      );
+    }
+    step.status = patch.status;
+  }
+  for (const key of ["summary", "result", "note"]) {
+    if (patch[key] !== undefined) {
+      if (typeof patch[key] !== "string") {
+        throw new CodedError(
+          ERROR_CODES.USAGE,
+          `--${key} must be a string`,
+        );
+      }
+      step[key] = patch[key];
+    }
+  }
+  if (
+    step.status === "done" &&
+    (!step.result || !step.result.trim())
+  ) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "a completed step needs a result",
+      { stepId: id },
+      "Pass --result with the check and its outcome, for example '`npm test` → 12 pass'.",
+    );
+  }
+  return step;
 }
 
 export function writePlanMarkdown(paths, task, plan) {

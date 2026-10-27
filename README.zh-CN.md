@@ -85,7 +85,7 @@ created → designed → planned → active → verified → pr_open → merged 
 ## 功能
 
 - **Task-spec 先行。** 每个任务都有一份简短的 `TASK.md`，包含 Request、Product、Design、Deferrals；人批准后才写代码。
-- **按 commit 粒度的计划。** `plan.json` 的每一步都有标题、commit subject 和验证方式；计划经校验后按 hash 批准。
+- **按 commit 粒度的计划。** `plan.json` 的每一步都有标题、commit subject 和验证方式；计划按不可变字段的 hash 批准，`plan step` 记录状态、总结和实际结果。`pr` 要求所有步骤完成。
 - **工作树隔离。** 每个任务有 `codeflow/<id>` 分支，以及 `~/.local/state/codeflow/worktrees/<repo>/<task>` 下的独立工作树。多个任务可以并行，每个任务有自己的锁。
 - **信任绑定的门禁。** `init` 只探测候选门禁；`trust` 展示每条命令，并把批准绑定到 config hash。没有信任就不执行。
 - **基于树的证据。** `verify` 记录命令、退出码、耗时、日志、tree hash、config hash、gate-set hash 和 dirty 状态。rebase 之后，只有树没变才可复用证据。
@@ -175,7 +175,12 @@ codeflow start
 # 在打印出的 worktree 里写代码；codeflow 命令可以从项目根目录
 # 或 task worktree 运行
 
-# 6. 验证、自审、交付
+# 6. 记录步骤进度
+codeflow plan step 1 --status done \
+  --summary "实现了重定向保护。" \
+  --result "`npm test` → pass"
+
+# 7. 验证、自审、交付
 codeflow verify
 codeflow self-review
 codeflow approve self-review
@@ -197,7 +202,7 @@ codeflow finish --confirm
 | `trust` | 展示并批准精确的门禁命令 | `--yes` |
 | `new <title>` | 创建任务和轻量 task-spec | `--kind`、`--issue` |
 | `approve <target>` | 按 hash 批准 `design`、`plan` 或 `self-review` | `--by`、`--note` |
-| `plan` | 校验并渲染计划 | `--init` |
+| `plan` | 校验并渲染计划；`plan step` 记录进度 | `--init`；`plan step <id> --status --summary --result` |
 | `start` | 创建任务分支和工作树 | `--dry-run` |
 | `verify` | 跑门禁并记录基于树的证据 | `--full`、`--live --allow-live`、`--retry` |
 | `self-review` | 生成自审包 | `--scope-drift`、`--closest-look` |
@@ -293,7 +298,7 @@ docs/                     目标、架构、契约、设计
 ## 开发
 
 ```bash
-npm test                  # 100 个测试：临时仓库、fake gate、fake gh
+npm test                  # 103 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```

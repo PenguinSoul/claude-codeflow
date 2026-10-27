@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { defaultConfig } from "../src/config.mjs";
 import {
+  planApprovalHash,
   planPath,
   readPlan,
   renderPlan,
+  updatePlanStep,
   validatePlan,
   writePlanMarkdown,
   writePlanTemplate,
@@ -87,4 +89,33 @@ test("renderPlan and writePlanMarkdown produce a readable plan", (t) => {
   assert.match(markdown, /Commit: `fix\(auth\): add the guard`/);
   assert.match(markdown, /Verification: `npm test` → pass/);
   assert.equal(renderPlan(plan), markdown);
+});
+
+test("plan approval ignores progress but covers immutable fields", () => {
+  const plan = validPlan("2026-10-27-plan");
+  const before = planApprovalHash(plan);
+  plan.steps[0].status = "done";
+  plan.steps[0].summary = "Implemented and checked.";
+  plan.steps[0].result = "`npm test` → pass";
+  plan.steps[0].note = "local note";
+  assert.equal(planApprovalHash(plan), before);
+
+  plan.steps[0].title = "A different step";
+  assert.notEqual(planApprovalHash(plan), before);
+});
+
+test("updatePlanStep requires a result when a step is done", () => {
+  const plan = validPlan("2026-10-27-plan");
+  assert.throws(
+    () => updatePlanStep(plan, "1", { status: "done" }),
+    (error) => error.code === "E_USAGE",
+  );
+
+  const step = updatePlanStep(plan, "1", {
+    status: "done",
+    summary: "Implemented and checked.",
+    result: "`npm test` → pass",
+  });
+  assert.equal(step.status, "done");
+  assert.match(renderPlan(plan), /Result: `npm test` → pass/);
 });

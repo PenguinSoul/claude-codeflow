@@ -44,8 +44,10 @@ import {
 } from "./github.mjs";
 import { runGates, selectGates } from "./gates.mjs";
 import {
+  planApprovalHash,
   planPath,
   readPlan,
+  updatePlanStep,
   validatePlan,
   writePlanMarkdown,
   writePlanTemplate,
@@ -125,6 +127,7 @@ Commands:
   new        Create a task and a task-spec
   approve    Approve the design or the plan by hash
   plan       Validate and render the task plan
+  plan step  Record step progress
   trust      Review and approve the gate commands
   verify     Run the gates and record evidence
   start      Create the task branch and worktree
@@ -151,6 +154,9 @@ Options:
   --allow-live Permit live gates (verify only)
   --retry      Retry a failing gate once (verify only)
   --init       Create a starter plan (plan only)
+  --status <s> Step status: pending, in_progress, done, blocked (plan step)
+  --summary <s> Step summary (plan step)
+  --result <s> Step result, e.g. "npm test -> pass" (plan step)
   --confirm    Confirm the merge (finish only)
   --delete-branch Delete the task branch (finish only)
   --force-unlock Remove a stale task lock (start/resume/finish)
@@ -188,6 +194,9 @@ function parseArgs(argv) {
     wait: false,
     timeout: null,
     interval: null,
+    status: null,
+    summary: null,
+    result: null,
     scopeDrift: [],
     closestLook: [],
     tier: null,
@@ -215,6 +224,33 @@ function parseArgs(argv) {
       flags.force = true;
     } else if (arg === "--init") {
       flags.init = true;
+    } else if (arg === "--status") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--status requires a value");
+      }
+      flags.status = value;
+      index += 1;
+    } else if (arg.startsWith("--status=")) {
+      flags.status = arg.slice("--status=".length);
+    } else if (arg === "--summary") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--summary requires a value");
+      }
+      flags.summary = value;
+      index += 1;
+    } else if (arg.startsWith("--summary=")) {
+      flags.summary = arg.slice("--summary=".length);
+    } else if (arg === "--result") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--result requires a value");
+      }
+      flags.result = value;
+      index += 1;
+    } else if (arg.startsWith("--result=")) {
+      flags.result = arg.slice("--result=".length);
     } else if (arg === "--yes") {
       flags.yes = true;
     } else if (arg === "--full") {
@@ -547,6 +583,104 @@ function approveCommand(repo, config, flags, positional) {
   };
 }
 
+function planStepCommand(repo, config, flags, positional) {
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "active" && task.status !== "verified") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; step progress requires an active or verified task`,
+      { status: task.status },
+      "Run `codeflow start` first.",
+    );
+  }
+
+  const approval = task.approvals?.plan;
+  if (!approval) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "the plan is not approved",
+      { taskId },
+      "Run `codeflow approve plan` first.",
+    );
+  }
+  const plan = readPlan(paths, task.id);
+  if (planApprovalHash(plan) !== approval.hash) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the plan changed since approval",
+      { expected: approval.hash, actual: planApprovalHash(plan) },
+      "Re-approve the plan before recording progress.",
+    );
+  }
+
+  const stepId = positional[2];
+  if (!stepId) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "plan step requires a step id",
+      null,
+      "Example: codeflow plan step 1 --status done --result \"`npm test` → pass\"",
+    );
+  }
+  const patch = {
+    status: flags.status ?? undefined,
+    summary: flags.summary ?? undefined,
+    result: flags.result ?? undefined,
+    note: flags.note ?? undefined,
+  };
+  if (Object.values(patch).every((value) => value === undefined)) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "plan step needs at least one change",
+      null,
+      "Pass --status, --summary, --result, or --note.",
+    );
+  }
+
+  const step = updatePlanStep(plan, stepId, patch);
+  writeJsonAtomic(planPath(paths, task.id), plan);
+  writePlanMarkdown(paths, task, plan);
+  const event = appendEvent(paths, task.id, "plan.step", actor(repo), {
+    stepId: step.id,
+    status: step.status,
+    result: step.result,
+  });
+  task.lastEventHash = event.hash;
+  writeTask(paths, task);
+
+  return {
+    data: {
+      taskId,
+      step: {
+        id: step.id,
+        title: step.title,
+        status: step.status,
+        result: step.result,
+      },
+      next: task.status === "verified" ? ["self-review", "pr"] : ["verify"],
+    },
+    taskId,
+  };
+}
+
 function planCommand(repo, config, flags) {
   const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
@@ -605,7 +739,7 @@ function planCommand(repo, config, flags) {
 
   const approval = task.approvals.plan;
   const stale = Boolean(
-    approval && hashFile(planPath(paths, task.id)) !== approval.hash,
+    approval && planApprovalHash(plan) !== approval.hash,
   );
   return {
     data: {
@@ -1470,6 +1604,21 @@ async function prCommand(repo, config, flags, env) {
   }
 
   const plan = readPlan(paths, task.id);
+  const openSteps = plan.steps.filter((step) => step.status !== "done");
+  if (openSteps.length > 0) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "the plan still has open steps",
+      {
+        open: openSteps.map((step) => ({
+          id: step.id,
+          status: step.status,
+          title: step.title,
+        })),
+      },
+      "Record progress with `codeflow plan step <id> --status done --result \"...\"`.",
+    );
+  }
   const taskSpec = readText(taskFile(paths, task.id, "TASK.md"));
   const templateFile = path.resolve(worktree, config.pr.template);
   if (!isContained(worktree, templateFile)) {
@@ -2039,7 +2188,10 @@ export async function run(argv, io = {}) {
         break;
       }
       case "plan": {
-        result = planCommand(repo, config, flags);
+        result =
+          positional[1] === "step"
+            ? planStepCommand(repo, config, flags, positional)
+            : planCommand(repo, config, flags);
         break;
       }
       case "trust": {

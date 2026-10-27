@@ -122,6 +122,23 @@ test("the built binary runs the full human-gated flow in a temporary repository"
   assert.equal(started.code, 0);
   assert.ok(existsSync(started.json.data.worktree));
 
+  const step = runCli(
+    [
+      "plan",
+      "step",
+      "1",
+      "--status",
+      "done",
+      "--summary",
+      "Implemented and checked.",
+      "--result",
+      "`npm test` → pass",
+      "--json",
+    ],
+    dir,
+  );
+  assert.equal(step.code, 0, step.err || step.out);
+
   const verified = runCli(["verify", "--json"], dir);
   assert.equal(verified.code, 0);
   assert.equal(verified.json.data.result, "pass");
