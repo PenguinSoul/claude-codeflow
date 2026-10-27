@@ -2,6 +2,7 @@ import path from "node:path";
 import { configHash } from "./config.mjs";
 import { gateSetHash } from "./gates.mjs";
 import { git } from "./git.mjs";
+import { assertSchema } from "./schema.mjs";
 import { taskFile } from "./state.mjs";
 import {
   nowIso,
@@ -132,7 +133,9 @@ export function writeEvidence(paths, task, evidence) {
 }
 
 export function readEvidence(paths, taskId) {
-  return readJsonSafe(taskFile(paths, taskId, "evidence.json"));
+  const file = taskFile(paths, taskId, "evidence.json");
+  const value = readJsonSafe(file);
+  return value ? assertSchema(value, "evidence", file) : null;
 }
 
 export function evidenceMeta(evidence) {

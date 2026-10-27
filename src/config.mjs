@@ -1,5 +1,6 @@
 import path from "node:path";
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
+import { assertSchema } from "./schema.mjs";
 import {
   fileExists,
   isPlainObject,
@@ -280,6 +281,7 @@ export function loadConfig(root) {
       error: err.message,
     });
   }
+  assertSchema(config, "config", file);
   const errors = validateConfig(config);
   if (errors.length > 0) {
     throw new CodedError(ERROR_CODES.CONFIG, "codeflow config is invalid", {

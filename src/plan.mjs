@@ -1,4 +1,5 @@
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
+import { assertSchema } from "./schema.mjs";
 import { taskFile } from "./state.mjs";
 import {
   fileExists,
@@ -49,8 +50,11 @@ export function readPlan(paths, taskId) {
     );
   }
   try {
-    return readJson(file);
+    return assertSchema(readJson(file), "plan", file);
   } catch (error) {
+    if (error instanceof CodedError) {
+      throw error;
+    }
     throw new CodedError(ERROR_CODES.CONFIG, "plan.json is not valid JSON", {
       path: file,
       error: error.message,

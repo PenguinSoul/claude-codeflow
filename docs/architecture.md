@@ -306,11 +306,13 @@ accidental edits.
 
 **Rejected:** only the latest state; mutable logs.
 
-### D17 — Schema versioning and migrations
+### D17 — Schema versioning; migrations land with a version bump
 
-Config, task, plan, evidence, PR, and event artifacts carry `schemaVersion`. A newer
-version than the CLI supports is a hard error. An older version is migrated with a
-backup. `doctor` reports versions.
+Config, task, plan, evidence, review, PR, trust, active, and event artifacts carry
+`schemaVersion`. Any unsupported version is a hard error (`E_SCHEMA_UNSUPPORTED`).
+Only `schemaVersion: 1` exists today; a migration for an older version must land with
+the first compatibility need, as a pure function with fixtures rather than a
+best-effort read. `doctor` reports the versions it finds.
 
 **Why:** the CLI will be upgraded while tasks are in flight.
 

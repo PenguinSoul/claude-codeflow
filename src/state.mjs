@@ -8,6 +8,7 @@ import {
 import { hostname } from "node:os";
 import path from "node:path";
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
+import { assertSchema } from "./schema.mjs";
 import {
   dateStamp,
   ensureDir,
@@ -62,6 +63,7 @@ export function readActive(paths) {
   if (!value || typeof value.taskId !== "string") {
     return null;
   }
+  assertSchema(value, "active", paths.activePath);
   if (!TASK_ID_PATTERN.test(value.taskId)) {
     throw new CodedError(
       ERROR_CODES.STATE_CONFLICT,
@@ -92,7 +94,15 @@ export function taskFile(paths, id, name) {
 }
 
 export function readTask(paths, id) {
-  return readJsonSafe(taskFile(paths, id, "task.json"));
+  const file = taskFile(paths, id, "task.json");
+  const value = readJsonSafe(file);
+  return value ? assertSchema(value, "task", file) : null;
+}
+
+export function readPr(paths, id) {
+  const file = taskFile(paths, id, "pr.json");
+  const value = readJsonSafe(file);
+  return value ? assertSchema(value, "pr", file) : null;
 }
 
 export function writeTask(paths, task) {
@@ -124,7 +134,8 @@ export function nextTaskId(paths, title) {
 }
 
 export function readTrust(paths) {
-  return readJsonSafe(paths.trustPath);
+  const value = readJsonSafe(paths.trustPath);
+  return value ? assertSchema(value, "trust", paths.trustPath) : null;
 }
 
 export function writeTrust(paths, trust) {

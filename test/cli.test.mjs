@@ -147,6 +147,23 @@ test("init, status, and doctor form a working slice", async (t) => {
   assert.match(brief.out, /no active task/);
 });
 
+test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await invoke(["init", "--json"], dir);
+  const env = fakeGhEnv(t, { checks: ["SUCCESS"] });
+
+  const result = await invoke(["doctor", "--json"], dir, env);
+  assert.equal(result.code, 0, result.err || result.out);
+  const checks = new Map(
+    result.json.data.checks.map((check) => [check.name, check]),
+  );
+  assert.equal(checks.get("ghAuth").ok, true);
+  assert.equal(checks.get("worktreeRoot").ok, true);
+  assert.equal(checks.get("schema").ok, true);
+  assert.equal(checks.get("locks").ok, true);
+});
+
 test("init is idempotent without force and rewrites with force", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));

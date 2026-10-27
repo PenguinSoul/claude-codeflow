@@ -1,5 +1,9 @@
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
-import { runFile } from "./util.mjs";
+import { runFile, which } from "./util.mjs";
+
+function ghBin(env = process.env) {
+  return which("gh", env) ?? "gh";
+}
 
 function gh(args, options = {}) {
   const {
@@ -7,7 +11,7 @@ function gh(args, options = {}) {
     env = process.env,
     allowFail = false,
   } = options;
-  const result = runFile("gh", args, {
+  const result = runFile(ghBin(env), args, {
     cwd,
     env,
     timeout: 120000,
@@ -35,8 +39,19 @@ function gh(args, options = {}) {
 }
 
 export function hasGh(env = process.env) {
-  const result = runFile("gh", ["--version"], { env });
+  const result = runFile(ghBin(env), ["--version"], { env });
   return result.ok;
+}
+
+export function ghAuthStatus(env = process.env) {
+  const result = runFile(ghBin(env), ["auth", "status"], { env, timeout: 15000 });
+  return {
+    ok: result.ok,
+    detail: result.ok
+      ? "authenticated"
+      : result.stderr.trim().split(/\r?\n/).filter(Boolean)[0] ??
+        "not authenticated",
+  };
 }
 
 export function findOpenPr(cwd, branch, env = process.env) {
