@@ -417,7 +417,7 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
     "branch": "codeflow/2026-10-26-fix-login",
     "worktree": "/home/user/.local/state/codeflow/worktrees/repo/2026-10-26-fix-login"
   },
-  "next": ["review", "pr"],
+  "next": ["self-review", "pr"],
   "trust": {
     "trusted": true,
     "configHash": "sha256:..."
@@ -530,7 +530,7 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
     "largeDiff": false
   },
   "evidencePath": ".codeflow/state/tasks/2026-10-26-fix-login/evidence.json",
-  "next": ["review", "pr"]
+  "next": ["self-review", "pr"]
 }
 ```
 
