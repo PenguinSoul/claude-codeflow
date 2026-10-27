@@ -73,7 +73,32 @@ export function cleanup(dir) {
   rmSync(dir, { recursive: true, force: true });
 }
 
-export function fakeGhEnv(t) {
+function rollupFor(state) {
+  if (state === "PENDING") {
+    return '{"status":"IN_PROGRESS","conclusion":null}';
+  }
+  if (state === "FAILURE") {
+    return '{"conclusion":"FAILURE"}';
+  }
+  if (state === "SKIPPED") {
+    return '{"conclusion":"SKIPPED"}';
+  }
+  return '{"conclusion":"SUCCESS"}';
+}
+
+export function fakeGhEnv(t, options = {}) {
+  const {
+    prState = "OPEN",
+    checks = ["SUCCESS", "PENDING"],
+  } = options;
+  const sequence = checks.length > 0 ? checks : ["SUCCESS"];
+  const cases = sequence
+    .map(
+      (state, index) => `    ${index + 1}) rollup='${rollupFor(state)}' ;;`,
+    )
+    .join("\n");
+  const fallback = rollupFor(sequence.at(-1));
+
   const bin = mkdtempSync(join(tmpdir(), "codeflow-gh-"));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const script = join(bin, "gh");
@@ -87,7 +112,16 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo '[]'; exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/o/r/pull/7"; exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","headRefOid":"abc","statusCheckRollup":[{"conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":null}],"mergeStateStatus":"BLOCKED","reviewDecision":""}'
+  counter="$(dirname "$0")/view-count"
+  n=0
+  if [ -f "$counter" ]; then n=$(cat "$counter"); fi
+  n=$((n + 1))
+  echo "$n" > "$counter"
+  case "$n" in
+${cases}
+    *) rollup='${fallback}' ;;
+  esac
+  echo "{\\"number\\":7,\\"url\\":\\"https://github.com/o/r/pull/7\\",\\"state\\":\\"${prState}\\",\\"headRefOid\\":\\"abc\\",\\"statusCheckRollup\\":[$rollup],\\"mergeStateStatus\\":\\"BLOCKED\\",\\"reviewDecision\\":\\"\\"}"
   exit 0
 fi
 if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi

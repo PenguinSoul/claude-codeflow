@@ -417,7 +417,7 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
     "branch": "codeflow/2026-10-26-fix-login",
     "worktree": "/home/user/.local/state/codeflow/worktrees/repo/2026-10-26-fix-login"
   },
-  "next": ["review", "pr"],
+  "next": ["self-review", "pr"],
   "trust": {
     "trusted": true,
     "configHash": "sha256:..."
@@ -530,7 +530,7 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
     "largeDiff": false
   },
   "evidencePath": ".codeflow/state/tasks/2026-10-26-fix-login/evidence.json",
-  "next": ["review", "pr"]
+  "next": ["self-review", "pr"]
 }
 ```
 
@@ -543,9 +543,18 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
   "url": "https://github.com/org/repo/pull/42",
   "bodyPath": ".codeflow/state/tasks/2026-10-26-fix-login/PR_BODY.md",
   "headSha": "abc1234",
-  "checks": { "state": "pending", "total": 5, "passed": 3, "failed": 0, "pending": 2 }
+  "checks": { "state": "pending", "total": 5, "passed": 3, "failed": 0, "pending": 2 },
+  "rebased": false,
+  "baseCommit": "def5678"
 }
 ```
+
+`pr` fetches and rebases the task branch onto `<remote>/<base>` before pushing. A
+conflict aborts the rebase, marks the task `blocked` with `E_REBASE_CONFLICT`, and
+leaves the worktree clean. If the rebase changes the tree, the existing evidence
+is stale: `pr` refuses with `E_APPROVAL_STALE` (`details.rebased: true`) until
+`verify`, `self-review`, and `approve self-review` are run again. A rewritten
+branch is pushed with `--force-with-lease`.
 
 In `compare` mode, `number`, `url`, and `checks` are `null`, and `compareUrl` is the
 pull-request compare link.
@@ -576,9 +585,15 @@ pull-request compare link.
   "state": "pending",
   "checks": { "total": 5, "passed": 3, "failed": 0, "pending": 2 },
   "lastReadAt": "2026-10-26T10:25:00Z",
-  "waited": false
+  "waited": false,
+  "polls": 0,
+  "timedOut": false
 }
 ```
+
+`watch --wait` polls only while checks are pending. `--timeout <seconds>` (default
+300) and `--interval <ms>` (default 5000) bound the wait; a timeout returns
+`timedOut: true` with `W_CHECKS_PENDING` and exit code 0.
 
 ### `comments`
 
@@ -598,9 +613,15 @@ pull-request compare link.
   "taskId": "2026-10-26-fix-login",
   "removedWorktree": true,
   "deletedBranch": false,
+  "mergeConfirmedBy": "gh",
   "status": "done"
 }
 ```
+
+`mergeConfirmedBy` is `gh`, `status`, or `confirm`. When `gh` is available and a
+GitHub PR is recorded, `finish` trusts the live PR state: an open PR is refused even
+with `--confirm` or `--force`. `--confirm` only substitutes for merge detection when
+it is unavailable (no `gh`, no GitHub PR, or a compare-mode fallback).
 
 ### `resume`
 

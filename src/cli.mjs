@@ -21,6 +21,7 @@ import {
   git,
   gitOrNull,
   isClean,
+  rebaseOntoBase,
   removeWorktree,
 } from "./git.mjs";
 import { failedAttention, scanAttention } from "./attention.mjs";
@@ -37,6 +38,7 @@ import {
   compareUrl,
   createOrUpdatePr,
   hasGh,
+  prView,
   readChecks,
   readComments,
 } from "./github.mjs";
@@ -133,8 +135,10 @@ Options:
   --scope-drift <s> Record scope drift (self-review, repeatable)
   --closest-look <s> Record a closest-look area (self-review, repeatable)
   --wait       Wait for checks (watch only)
+  --timeout <s> Wait timeout in seconds (watch only)
+  --interval <ms> Poll interval in milliseconds (watch only)
   --brief      One-line status (status only)
-  --force      Overwrite config or force cleanup
+  --force      Overwrite config, force cleanup, or force unlock
   --dry-run    Print side effects without applying them
   --help       Show this help
   --version    Show the version
@@ -159,6 +163,8 @@ function parseArgs(argv) {
     forceUnlock: false,
     noPush: false,
     wait: false,
+    timeout: null,
+    interval: null,
     scopeDrift: [],
     closestLook: [],
     tier: null,
@@ -206,6 +212,24 @@ function parseArgs(argv) {
       flags.noPush = true;
     } else if (arg === "--wait") {
       flags.wait = true;
+    } else if (arg === "--timeout") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--timeout requires a value");
+      }
+      flags.timeout = value;
+      index += 1;
+    } else if (arg.startsWith("--timeout=")) {
+      flags.timeout = arg.slice("--timeout=".length);
+    } else if (arg === "--interval") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--interval requires a value");
+      }
+      flags.interval = value;
+      index += 1;
+    } else if (arg.startsWith("--interval=")) {
+      flags.interval = arg.slice("--interval=".length);
     } else if (arg === "--scope-drift") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
@@ -622,10 +646,10 @@ function verifyCommand(repo, config, flags) {
       { taskId },
     );
   }
-  if (task.status !== "active") {
+  if (task.status !== "active" && task.status !== "verified") {
     throw new CodedError(
       ERROR_CODES.STATE_CONFLICT,
-      `task is ${task.status}; verify requires an active task`,
+      `task is ${task.status}; verify requires an active or verified task`,
       { status: task.status },
       "Run `codeflow start` first.",
     );
@@ -943,7 +967,33 @@ function resumeCommand(repo, config, flags) {
   }
 }
 
-function finishCommand(repo, config, flags) {
+function mergeDetection(repo, task, paths, env) {
+  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  if (!pr || pr.mode !== "gh" || !pr.number) {
+    return { available: false, merged: false, reason: "no GitHub PR" };
+  }
+  if (!hasGh(env)) {
+    return { available: false, merged: false, reason: "gh is not installed" };
+  }
+  try {
+    const view = prView(taskWorktree(repo, task), pr.number, env);
+    return {
+      available: true,
+      merged: String(view.state ?? "").toUpperCase() === "MERGED",
+      state: view.state,
+      pr,
+      view,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      merged: false,
+      reason: error.message,
+    };
+  }
+}
+
+function finishCommand(repo, config, flags, env) {
   const paths = statePaths(repo.root, config);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
@@ -964,16 +1014,39 @@ function finishCommand(repo, config, flags) {
     );
   }
 
+  const detection =
+    task.status === "pr_open"
+      ? mergeDetection(repo, task, paths, env)
+      : { available: false, merged: false, reason: `task is ${task.status}` };
+  const confirmedByStatus = task.status === "merged";
+  const confirmedByGh = detection.available && detection.merged;
+  const confirmedByHuman = flags.confirm && !detection.available;
   const mergeConfirmed =
-    task.status === "merged" ||
-    flags.confirm ||
-    (task.status === "pr_open" && flags.confirm);
-  if (!mergeConfirmed && !flags.force) {
+    confirmedByStatus || confirmedByGh || confirmedByHuman;
+  const mergeConfirmedBy = confirmedByStatus
+    ? "status"
+    : confirmedByGh
+      ? "gh"
+      : confirmedByHuman
+        ? "confirm"
+        : null;
+
+  if (!mergeConfirmed) {
     throw new CodedError(
       ERROR_CODES.STATE_CONFLICT,
-      `task is ${task.status}; finish requires a merged task or --confirm`,
-      { status: task.status },
-      "Merge the PR, then run `codeflow finish --confirm`.",
+      detection.available
+        ? `the GitHub PR is ${detection.state ?? "not merged"}; finish requires a merged PR`
+        : `task is ${task.status}; finish requires a merged task or --confirm when merge detection is unavailable`,
+      detection.available
+        ? { status: task.status, prState: detection.state }
+        : {
+            status: task.status,
+            mergeDetection: "unavailable",
+            reason: detection.reason,
+          },
+      detection.available
+        ? "Merge the PR first, then run `codeflow finish`."
+        : "Merge the PR, then run `codeflow finish --confirm`.",
     );
   }
 
@@ -983,6 +1056,7 @@ function finishCommand(repo, config, flags) {
         taskId,
         worktree: task.worktree,
         wouldRemove: Boolean(task.worktree && fileExists(task.worktree)),
+        mergeConfirmedBy,
         dryRun: true,
       },
       taskId,
@@ -1017,11 +1091,20 @@ function finishCommand(repo, config, flags) {
       deletedBranch = result !== null;
     }
 
+    if (confirmedByGh && detection.pr) {
+      writeJsonAtomic(taskFile(paths, task.id, "pr.json"), {
+        ...detection.pr,
+        state: "merged",
+        lastReadAt: nowIso(),
+      });
+    }
+
     task.status = "done";
     task.blocked = null;
     const event = appendEvent(paths, task.id, "task.finished", actor(repo), {
       removedWorktree,
       deletedBranch,
+      mergeConfirmedBy,
     });
     task.lastEventHash = event.hash;
     writeTask(paths, task);
@@ -1031,6 +1114,7 @@ function finishCommand(repo, config, flags) {
         taskId,
         removedWorktree,
         deletedBranch,
+        mergeConfirmedBy,
         status: "done",
       },
       taskId,
@@ -1176,6 +1260,61 @@ async function prCommand(repo, config, flags, env) {
   }
 
   const worktree = taskWorktree(repo, task);
+  if (isDirty(worktree)) {
+    throw new CodedError(
+      ERROR_CODES.DIRTY_TREE,
+      "the worktree has uncommitted changes",
+      { worktree },
+      "Commit or discard the changes, then retry.",
+    );
+  }
+
+  const remote = config.remote ?? "origin";
+  let rebase = {
+    attempted: false,
+    rebased: false,
+    source: null,
+    baseCommit: null,
+    conflicts: [],
+  };
+  if (!flags.noPush && !flags.dryRun) {
+    const previousStatus = task.status;
+    rebase = {
+      attempted: true,
+      ...rebaseOntoBase(worktree, remote, config.baseBranch),
+    };
+    if (!rebase.ok && rebase.reason === "conflict") {
+      task.status = "blocked";
+      task.blocked = {
+        code: ERROR_CODES.REBASE_CONFLICT,
+        reason: `rebasing onto ${remote}/${config.baseBranch} produced conflicts`,
+        at: nowIso(),
+        from: previousStatus,
+        hint: "Resolve the conflict manually, then run `codeflow resume`.",
+        conflicts: rebase.conflicts,
+      };
+      const event = appendEvent(paths, task.id, "pr.rebase_conflict", actor(repo), {
+        base: `${remote}/${config.baseBranch}`,
+        baseCommit: rebase.baseCommit,
+        conflicts: rebase.conflicts,
+      });
+      task.lastEventHash = event.hash;
+      writeTask(paths, task);
+      throw new CodedError(
+        ERROR_CODES.REBASE_CONFLICT,
+        `rebase onto ${remote}/${config.baseBranch} produced conflicts`,
+        {
+          baseCommit: rebase.baseCommit,
+          conflicts: rebase.conflicts,
+          headBefore: rebase.headBefore,
+          headAfter: rebase.headAfter,
+          taskStatus: "blocked",
+        },
+        "Resolve the conflict manually, run `codeflow resume`, then verify again.",
+      );
+    }
+  }
+
   const evidence = readEvidence(paths, task.id);
   if (!evidence) {
     throw new CodedError(
@@ -1185,7 +1324,6 @@ async function prCommand(repo, config, flags, env) {
       "Run `codeflow verify` first.",
     );
   }
-  const dirty = isDirty(worktree);
   const tree = gitTreeHash(worktree);
   const hash = configHash(config);
   if (
@@ -1193,14 +1331,24 @@ async function prCommand(repo, config, flags, env) {
       treeHash: tree,
       configHash: hash,
       gateSetHash: evidence.gateSetHash,
-      dirty,
+      dirty: false,
     })
   ) {
     throw new CodedError(
       ERROR_CODES.APPROVAL_STALE,
-      "the evidence is missing, stale, or the worktree is dirty",
-      { treeHash: tree, evidenceTree: evidence.treeHash, dirty },
-      "Commit the work, run `codeflow verify`, then retry.",
+      rebase.rebased
+        ? "the branch was rebased and the evidence no longer matches the tree"
+        : "the evidence is missing, stale, or the worktree is dirty",
+      {
+        treeHash: tree,
+        evidenceTree: evidence.treeHash,
+        dirty: false,
+        rebased: rebase.rebased,
+        baseCommit: rebase.baseCommit,
+      },
+      rebase.rebased
+        ? "Run `codeflow verify`, `codeflow self-review`, and `codeflow approve self-review`, then retry."
+        : "Commit the work, run `codeflow verify`, then retry.",
     );
   }
 
@@ -1249,8 +1397,12 @@ async function prCommand(repo, config, flags, env) {
   }
 
   if (!flags.noPush) {
-    const remote = config.remote ?? "origin";
-    const pushed = git(["push", "-u", remote, task.branch], {
+    const pushArgs = ["push", "-u"];
+    if (rebase.rebased) {
+      pushArgs.push("--force-with-lease");
+    }
+    pushArgs.push(remote, task.branch);
+    const pushed = git(pushArgs, {
       cwd: worktree,
       allowFail: true,
     });
@@ -1258,8 +1410,10 @@ async function prCommand(repo, config, flags, env) {
       throw new CodedError(
         ERROR_CODES.PUSH_FAILED,
         "the task branch could not be pushed",
-        { remote, branch: task.branch },
-        "Check the remote and your credentials, then retry.",
+        { remote, branch: task.branch, rebased: rebase.rebased },
+        rebase.rebased
+          ? "The rebase rewrote the branch and the lease failed. Fetch the remote, confirm nobody else updated the branch, then retry."
+          : "Check the remote and your credentials, then retry.",
       );
     }
   }
@@ -1319,9 +1473,36 @@ async function prCommand(repo, config, flags, env) {
     mode: pr.mode,
     number: pr.number,
     url: pr.url ?? pr.compareUrl,
+    rebased: rebase.rebased,
+    baseCommit: rebase.baseCommit,
   });
   task.lastEventHash = event.hash;
   writeTask(paths, task);
+
+  const warnings = [];
+  if (pr.mode === "compare") {
+    warnings.push({
+      code: "W_GH_MISSING",
+      message: "gh is unavailable; pushed a compare URL instead of a PR",
+    });
+  }
+  if (rebase.attempted && rebase.reason === "no-base") {
+    warnings.push({
+      code: "W_BASE_MISSING",
+      message: `could not resolve ${remote}/${config.baseBranch}; skipped the pre-push rebase`,
+    });
+  } else if (rebase.attempted && rebase.source === "local") {
+    warnings.push({
+      code: "W_BASE_LOCAL",
+      message: `could not fetch ${remote}/${config.baseBranch}; rebased onto the local ${config.baseBranch}`,
+    });
+  }
+  if (rebase.rebased) {
+    warnings.push({
+      code: "W_REBASED",
+      message: `rebased onto ${remote}/${config.baseBranch} and force-pushed with lease`,
+    });
+  }
 
   return {
     data: {
@@ -1332,17 +1513,11 @@ async function prCommand(repo, config, flags, env) {
       bodyPath: pr.bodyPath,
       headSha: pr.headSha,
       checks: pr.checks,
+      rebased: rebase.rebased,
+      baseCommit: rebase.baseCommit,
     },
     taskId,
-    warnings:
-      pr.mode === "compare"
-        ? [
-            {
-              code: "W_GH_MISSING",
-              message: "gh is unavailable; pushed a compare URL instead of a PR",
-            },
-          ]
-        : [],
+    warnings,
   };
 }
 
@@ -1373,14 +1548,47 @@ async function watchCommand(repo, config, flags, env) {
   const worktree = taskWorktree(repo, task);
   let checks = readChecks(worktree, pr.number, env);
   let waited = false;
+  let timedOut = false;
+  let polls = 0;
   if (flags.wait) {
-    const attempts = Number(process.env.CODEFLOW_WATCH_ATTEMPTS ?? 30);
-    const interval = Number(process.env.CODEFLOW_WATCH_INTERVAL_MS ?? 5000);
-    for (let index = 0; index < attempts && checks.state === "pending"; index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, interval));
+    const timeoutValue = Number(
+      flags.timeout ?? process.env.CODEFLOW_WATCH_TIMEOUT_SEC ?? 300,
+    );
+    const intervalValue = Number(
+      flags.interval ?? process.env.CODEFLOW_WATCH_INTERVAL_MS ?? 5000,
+    );
+    if (!Number.isFinite(timeoutValue) || timeoutValue < 0) {
+      throw new CodedError(
+        ERROR_CODES.USAGE,
+        "--timeout must be a non-negative number of seconds",
+      );
+    }
+    if (!Number.isFinite(intervalValue) || intervalValue < 1) {
+      throw new CodedError(
+        ERROR_CODES.USAGE,
+        "--interval must be a positive number of milliseconds",
+      );
+    }
+    const timeoutMs = timeoutValue * 1000;
+    const interval = Math.round(intervalValue);
+    const deadline = Date.now() + timeoutMs;
+    const maxPolls = Number(
+      process.env.CODEFLOW_WATCH_ATTEMPTS ?? Number.MAX_SAFE_INTEGER,
+    );
+    while (
+      checks.state === "pending" &&
+      Date.now() < deadline &&
+      polls < maxPolls
+    ) {
+      const remaining = Math.max(0, deadline - Date.now());
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(interval, remaining)),
+      );
       checks = readChecks(worktree, pr.number, env);
       waited = true;
+      polls += 1;
     }
+    timedOut = checks.state === "pending" && Date.now() >= deadline;
   }
   pr.checks = checks;
   pr.lastReadAt = nowIso();
@@ -1391,8 +1599,18 @@ async function watchCommand(repo, config, flags, env) {
       checks,
       lastReadAt: pr.lastReadAt,
       waited,
+      polls,
+      timedOut,
     },
     taskId,
+    warnings: timedOut
+      ? [
+          {
+            code: "W_CHECKS_PENDING",
+            message: "checks were still pending when the wait timeout expired",
+          },
+        ]
+      : [],
   };
 }
 
@@ -1655,7 +1873,7 @@ export async function run(argv, io = {}) {
       }
       case "finish": {
         const config = loadConfig(repo.root);
-        result = finishCommand(repo, config, flags);
+        result = finishCommand(repo, config, flags, env);
         break;
       }
       case "self-review": {

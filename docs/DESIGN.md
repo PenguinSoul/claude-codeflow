@@ -66,12 +66,15 @@ comments) and L3 (autonomous merge) are out of scope.
    evidence, attention items, scope drift, closest-look areas.
    `/codeflow:approve self-review` records the human sign-off.
 8. **Ship.** `/codeflow:pr` requires fresh evidence, a clean tree, and a self-review.
-   It renders the repository's PR template, pushes the branch, and creates the PR with
-   `gh` — or prints a compare URL and body path when `gh` is unavailable.
-9. **Watch.** `/codeflow:watch` reads CI once (snapshot) or with `--wait`; it never
-   merges. `/codeflow:comments` collects review threads read-only.
-10. **Finish.** After the human merges, `/codeflow:finish` removes the worktree and
-    marks the task done.
+   It rebases onto the base (a conflict blocks the task), force-pushes with lease after a
+   rewrite, renders the repository's PR template, and creates the PR with `gh` — or prints
+   a compare URL and body path when `gh` is unavailable. If the rebase changes the tree,
+   evidence must be refreshed.
+9. **Watch.** `/codeflow:watch` reads CI once (snapshot) or with `--wait` and a bounded
+   timeout; it never merges. `/codeflow:comments` collects review threads read-only.
+10. **Finish.** After the human merges, `/codeflow:finish` verifies the PR state with
+    `gh` when available, removes the worktree, and marks the task done. `--force` only
+    bypasses a dirty worktree; it never bypasses the merge check.
 
 ## Command surface
 
@@ -85,12 +88,12 @@ comments) and L3 (autonomous merge) are out of scope.
 | `codeflow start` | `/codeflow:start` | Create branch and worktree |
 | `codeflow verify` | `/codeflow:verify` | Run gates, capture evidence, scan attention |
 | `codeflow self-review` | `/codeflow:self-review` | Build the self-review packet |
-| `codeflow pr` | `/codeflow:pr` | Render body, push, create/update PR |
-| `codeflow watch` | `/codeflow:watch` | Read-only CI snapshot or wait |
+| `codeflow pr` | `/codeflow:pr` | Rebase, render body, push, create/update PR |
+| `codeflow watch` | `/codeflow:watch` | Read-only CI snapshot or bounded wait |
 | `codeflow comments` | `/codeflow:comments` | Read-only review threads |
 | `codeflow status` | `/codeflow:status` | Human or `--json` status; `--brief` for hooks |
 | `codeflow resume` | `/codeflow:resume` | Resume a blocked task |
-| `codeflow finish` | `/codeflow:finish` | Remove worktree after merge |
+| `codeflow finish` | `/codeflow:finish` | Verify the merge, then remove the worktree |
 | `codeflow doctor` | `/codeflow:doctor` | Environment and state diagnostics |
 
 All commands support `--json` with the envelope in [`contracts.md`](contracts.md).

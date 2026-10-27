@@ -135,8 +135,10 @@ test("the built binary runs the full L1 flow in a temporary repository", async (
   assert.equal(comments.code, 0);
   assert.equal(comments.json.data.threads, 0);
 
-  const finished = runCli(["finish", "--confirm", "--json"], dir);
+  const mergedEnv = fakeGhEnv(t, { prState: "MERGED", checks: ["SUCCESS"] });
+  const finished = runCli(["finish", "--json"], dir, mergedEnv);
   assert.equal(finished.code, 0);
+  assert.equal(finished.json.data.mergeConfirmedBy, "gh");
   assert.equal(existsSync(started.json.data.worktree), false);
 
   const status = runCli(["status", "--json"], dir);

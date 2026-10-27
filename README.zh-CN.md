@@ -92,6 +92,8 @@ created → designed → planned → active → verified → pr_open → merged 
 - **风险扫描。** 测试文件改动、被跳过的测试、suppression、配置和锁文件改动、大 diff、scope drift、closest look 都会摆到人面前。它是探照灯，不是自动判决。
 - **自审包。** `REVIEW.md` 里集中呈现 diff stat、计划状态、验证表、风险项、scope drift 和最该重点看的地方。
 - **PR 模板保真。** 保留仓库的 `PULL_REQUEST_TEMPLATE.md`；只有证据能证明的 checklist 项才会打勾；模板没有 `Review attention` 时自动追加。
+- **push 前先 rebase。** `pr` 会 fetch base、rebase 任务分支，重写后用 `--force-with-lease` 推送。冲突会把任务置为 blocked；树变化会让证据失效，必须重新验证。
+- **实时合并检测。** 有 `gh` 时，`finish` 以真实 PR 状态为准。PR 还开着时，即使 `--confirm` 或 `--force` 也会拒绝；`--confirm` 只在无法检测合并时作为替代。
 - **GitHub 可选。** 有 `gh` 时，`pr` 创建或更新 PR，`watch` 读 checks，`comments` 读 review 线程；没有 `gh` 时，`pr` 推分支并打印 compare URL。
 - **没有隐藏运行时。** 零运行时依赖，无构建步骤，纯 Node ESM。
 
@@ -196,12 +198,12 @@ codeflow finish --confirm
 | `start` | 创建任务分支和工作树 | `--dry-run` |
 | `verify` | 跑门禁并记录基于树的证据 | `--full`、`--live --allow-live`、`--retry` |
 | `self-review` | 生成自审包 | `--scope-drift`、`--closest-look` |
-| `pr` | 渲染 PR 描述并创建/更新 PR | `--no-push`、`--dry-run` |
-| `watch` | 只读查看 PR checks | `--wait` |
+| `pr` | 渲染 PR 描述、rebase 到 base 并创建/更新 PR | `--no-push`、`--dry-run` |
+| `watch` | 只读查看 PR checks | `--wait`、`--timeout <s>`、`--interval <ms>` |
 | `comments` | 只读收集 review 评论，不改代码 | — |
 | `status` | 查看当前任务和下一步 | `--brief`、`--task` |
 | `resume` | 清除 blocked 状态 | `--task` |
-| `finish` | 合并后移除工作树 | `--confirm`、`--delete-branch`、`--force` |
+| `finish` | 有 `gh` 时先验证合并，再移除工作树 | `--confirm`、`--delete-branch`、`--force` |
 | `doctor` | 检查环境和配置 | — |
 
 全局选项：`--json`、`--task <id>`、`--help`、`--version`。
@@ -257,8 +259,9 @@ codeflow finish --confirm
 
 - **信任必须显式。** `init` 从不执行门禁。`trust` 展示每条命令，并把批准绑定到规范化后的 config hash。配置一变，信任和证据都失效。
 - **证据基于树。** rebase 可能改变 commit ID；只有 tree hash、config hash、gate set 全部匹配，并且工作区干净时，证据才可复用。
-- **没有证据不能开 PR。** `pr` 需要通过且未过期的证据、干净的工作区、新鲜的设计/计划批准，以及已批准的自审。
+- **没有证据不能开 PR。** `pr` 需要通过且未过期的证据、干净的工作区、新鲜的设计/计划批准，以及已批准的自审。rebase 之后可以在 `verified` 状态重跑 `verify` 刷新证据。
 - **没有合并。** 不存在 merge 命令；skill 明确禁止 `gh pr merge`。
+- **不能强推未合并的 PR。** `finish --force` 只绕过脏工作树；`gh` 显示 PR 还开着时，`--confirm` 或 `--force` 都会被拒绝。
 - **不许弱化门禁。** skill 禁止为了让门禁通过而改测试、加 skip，或加 `@ts-ignore`、`@ts-expect-error`、`eslint-disable`、`biome-ignore`、`as any`。
 - **不存 token。** GitHub 认证归 `gh` 管，codeflow 不保存任何凭证。
 - **日志只在本机。** 门禁日志可能包含项目工具打印出的敏感信息，永远不会被上传。
@@ -286,7 +289,7 @@ docs/                     目标、架构、契约、设计
 ## 开发
 
 ```bash
-npm test                  # 80 个测试：临时仓库、fake gate、fake gh
+npm test                  # 86 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```

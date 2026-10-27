@@ -68,6 +68,9 @@ These are hard stops, not advice.
   the human to review the commands.
 - **Never touch the base branch.** Work only in the task worktree and
   `codeflow/<id>` branch.
+- **Never finish an unmerged task.** When `gh` reports the PR open, `finish`
+  refuses even with `--confirm` or `--force`. `--force` only bypasses a dirty
+  worktree.
 - **Never guess at a conflict.** A rebase conflict, ambiguous requirement, or
   security concern becomes `blocked`; ask the human.
 - **Never hide a failure.** Report the error code, the failing gate, and the
@@ -97,9 +100,12 @@ Common codes:
 
 - `E_TRUST_REQUIRED` / `E_TRUST_STALE`: review and approve the commands.
 - `E_STATE_CONFLICT`: the task is not in the right state; read `status`.
-- `E_APPROVAL_STALE`: an approved artifact changed; re-approve it.
+- `E_APPROVAL_STALE`: an approved artifact changed; re-approve it. After a
+  rebase, run `verify`, `self-review`, and `approve self-review` again.
 - `E_GATE_FAILED` / `E_GATE_TIMEOUT`: fix the cause; do not weaken the gate.
 - `E_DIRTY_TREE`: commit or discard the changes; do not force without the human.
+- `E_REBASE_CONFLICT`: the task is blocked; ask the human to resolve the conflict,
+  then run `resume`.
 - `E_GH_MISSING` / `E_GH_AUTH`: use the compare URL or fix `gh`.
 - `E_BLOCKED` / a `blocked` status: stop and ask the human.
 
