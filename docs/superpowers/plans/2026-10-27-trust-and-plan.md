@@ -368,7 +368,8 @@ git commit -m "feat(task): require a durable-knowledge record"
 
 - [ ] **Step 1: Add a failing jargon test**
 
-Assert that user-facing docs and the plugin manifest contain no `L1`, `L2`, or `L3` level labels.
+Assert that user-facing docs and the plugin manifest contain no internal workflow
+level labels.
 
 - [ ] **Step 2: Replace the terms**
 
@@ -395,4 +396,4 @@ git commit -m "docs: replace internal workflow labels"
 - A tampered self-review is refused.
 - Zero checks report `none`, not `success`.
 - Plan progress updates do not invalidate the approved plan.
-- No user-facing doc contains `L1`, `L2`, or `L3`.
+- No user-facing doc contains an internal workflow level label.

@@ -129,6 +129,8 @@ test("user-facing docs do not use internal workflow labels", () => {
     ...readdirSync(join(root, "docs"))
       .filter((name) => name.endsWith(".md"))
       .map((name) => `docs/${name}`),
+    "docs/superpowers/plans/2026-10-26-codeflow-core.md",
+    "docs/superpowers/plans/2026-10-27-trust-and-plan.md",
   ];
 
   for (const file of files) {
