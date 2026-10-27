@@ -514,7 +514,7 @@ async function setupPlannedTask(dir, t) {
   return { taskId, taskFile, task, worktree: task.worktree };
 }
 
-test("start creates a worktree and finish removes it", async (t) => {
+test("start creates a worktree and abandon removes it", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
   const planned = await setupPlannedTask(dir, t);
@@ -534,12 +534,16 @@ test("start creates a worktree and finish removes it", async (t) => {
   );
 
   const finish = await invoke(["finish", "--confirm", "--json"], dir);
-  assert.equal(finish.code, 0);
-  assert.equal(finish.json.data.removedWorktree, true);
+  assert.equal(finish.code, 3);
+  assert.equal(finish.json.error.code, "E_STATE_CONFLICT");
+
+  const abandoned = await invoke(["abandon", "--confirm", "--json"], dir);
+  assert.equal(abandoned.code, 0);
+  assert.equal(abandoned.json.data.removedWorktree, true);
   assert.equal(existsSync(planned.worktree), false);
 
   const done = await invoke(["status", "--json"], dir);
-  assert.equal(done.json.data.task.status, "done");
+  assert.equal(done.json.data.task.status, "abandoned");
 });
 
 test("resume clears a blocked state", async (t) => {
@@ -567,19 +571,19 @@ test("resume clears a blocked state", async (t) => {
   assert.equal(after.blocked, null);
 });
 
-test("finish refuses a dirty worktree without force", async (t) => {
+test("abandon refuses a dirty worktree without force", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
   const planned = await setupPlannedTask(dir, t);
   assert.equal((await invoke(["start", "--json"], dir)).code, 0);
   writeFileSync(join(planned.worktree, "dirty.txt"), "dirty\n");
 
-  const refused = await invoke(["finish", "--confirm", "--json"], dir);
+  const refused = await invoke(["abandon", "--confirm", "--json"], dir);
   assert.equal(refused.code, 4);
   assert.equal(refused.json.error.code, "E_DIRTY_TREE");
 
   const forced = await invoke(
-    ["finish", "--confirm", "--force", "--json"],
+    ["abandon", "--confirm", "--force", "--json"],
     dir,
   );
   assert.equal(forced.code, 0);

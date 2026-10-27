@@ -76,7 +76,7 @@ test("a dead pid makes a lock stale", (t) => {
   assert.equal(lock.command, "verify");
 });
 
-test("force removes a lock held by another live pid", (t) => {
+test("force refuses a lock held by a live pid", (t) => {
   const { paths } = setup(t);
   writeJsonAtomic(lockPath(paths, "2026-10-27-task"), {
     pid: 1,
@@ -86,12 +86,12 @@ test("force removes a lock held by another live pid", (t) => {
   });
 
   assert.throws(
-    () => acquireLock(paths, "2026-10-27-task", { command: "verify" }),
+    () =>
+      acquireLock(paths, "2026-10-27-task", {
+        command: "verify",
+        force: true,
+      }),
     (error) => error.code === "E_LOCKED",
   );
-  const lock = acquireLock(paths, "2026-10-27-task", {
-    command: "verify",
-    force: true,
-  });
-  assert.equal(lock.command, "verify");
+  assert.equal(readLock(paths, "2026-10-27-task").command, "old");
 });
