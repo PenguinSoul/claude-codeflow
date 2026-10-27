@@ -116,6 +116,12 @@ Every transition is guarded:
 - **PR fidelity.** The repository's `PULL_REQUEST_TEMPLATE.md` is preserved;
   checklist items are ticked only when evidence proves them; a `Review
   attention` section is appended when the template lacks one.
+- **Rebase before push.** `pr` fetches the base, rebases the task branch, and
+  force-pushes with lease after a rewrite. A conflict blocks the task; a changed
+  tree invalidates evidence until it is refreshed.
+- **Live merge detection.** When `gh` is available, `finish` trusts the actual PR
+  state. An open PR is refused even with `--confirm` or `--force`; `--confirm`
+  only covers the case where merge detection is unavailable.
 - **GitHub optional.** With `gh`, `pr` creates or updates the PR, `watch` reads
   checks, and `comments` reads review threads. Without `gh`, `pr` pushes the
   branch and prints a compare URL.
@@ -226,12 +232,12 @@ Every command supports `--json`.
 | `start` | Create the task branch and worktree | `--dry-run` |
 | `verify` | Run gates and record tree-hash evidence | `--full`, `--live --allow-live`, `--retry` |
 | `self-review` | Build the self-review packet | `--scope-drift`, `--closest-look` |
-| `pr` | Render the PR body and create/update the PR | `--no-push`, `--dry-run` |
-| `watch` | Read the PR checks | `--wait` |
+| `pr` | Render the PR body, rebase onto the base, and create/update the PR | `--no-push`, `--dry-run` |
+| `watch` | Read the PR checks | `--wait`, `--timeout <s>`, `--interval <ms>` |
 | `comments` | Collect review comments without changing code | — |
 | `status` | Show the active task and next step | `--brief`, `--task` |
 | `resume` | Clear a blocked state | `--task` |
-| `finish` | Remove the worktree after the merge | `--confirm`, `--delete-branch`, `--force` |
+| `finish` | Verify the merge with `gh` when available, then remove the worktree | `--confirm`, `--delete-branch`, `--force` |
 | `doctor` | Check the environment and configuration | — |
 
 Global options: `--json`, `--task <id>`, `--help`, `--version`.
@@ -294,8 +300,12 @@ for commands that omit `--task`.
   reusable only when the tree hash, config hash, and gate set match, and the
   worktree is clean.
 - **No PR without proof.** `pr` requires passing evidence, a clean tree, fresh
-  design/plan approvals, and an approved self-review.
+  design/plan approvals, and an approved self-review. `verify` may be re-run on a
+  `verified` task to refresh evidence after a rebase.
 - **No merge.** There is no merge command. The skill forbids `gh pr merge`.
+- **No forced finish of an open PR.** `finish --force` only bypasses a dirty
+  worktree. When `gh` reports the PR open, `finish` refuses regardless of
+  `--confirm` or `--force`.
 - **No gate weakening.** The skill forbids editing tests, adding skips, or adding
   `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `biome-ignore`, or `as any`
   to make a gate pass.

@@ -107,3 +107,95 @@ export function isClean(cwd) {
   return git(["status", "--porcelain"], { cwd }).length === 0;
 }
 
+function resolveBaseRef(cwd, remote, base) {
+  if (remote) {
+    const fetched = gitOrNull(["fetch", "--quiet", remote, base], { cwd });
+    if (fetched !== null) {
+      const fetchedCommit = gitOrNull(["rev-parse", "--verify", "FETCH_HEAD"], {
+        cwd,
+      });
+      if (fetchedCommit) {
+        return { ref: "FETCH_HEAD", source: "fetch", fetched: true };
+      }
+    }
+    const remoteRef = `refs/remotes/${remote}/${base}`;
+    if (gitOrNull(["rev-parse", "--verify", remoteRef], { cwd })) {
+      return { ref: remoteRef, source: "remote", fetched: false };
+    }
+  }
+  if (gitOrNull(["rev-parse", "--verify", `refs/heads/${base}`], { cwd })) {
+    return { ref: `refs/heads/${base}`, source: "local", fetched: false };
+  }
+  return { ref: null, source: null, fetched: false };
+}
+
+export function rebaseOntoBase(cwd, remote, base) {
+  const headBefore = git(["rev-parse", "HEAD"], { cwd });
+  const resolved = resolveBaseRef(cwd, remote, base);
+  if (!resolved.ref) {
+    return {
+      ok: true,
+      rebased: false,
+      reason: "no-base",
+      source: null,
+      fetched: resolved.fetched,
+      baseCommit: null,
+      headBefore,
+      headAfter: headBefore,
+      conflicts: [],
+    };
+  }
+
+  const baseCommit = git(["rev-parse", resolved.ref], { cwd });
+  const upToDate =
+    gitOrNull(["merge-base", "--is-ancestor", baseCommit, "HEAD"], { cwd }) !==
+    null;
+  if (upToDate) {
+    return {
+      ok: true,
+      rebased: false,
+      reason: "up-to-date",
+      source: resolved.source,
+      fetched: resolved.fetched,
+      baseCommit,
+      headBefore,
+      headAfter: headBefore,
+      conflicts: [],
+    };
+  }
+
+  const rebased = git(["rebase", resolved.ref], { cwd, allowFail: true });
+  if (rebased === null) {
+    const conflicts = (gitOrNull(
+      ["diff", "--name-only", "--diff-filter=U"],
+      { cwd },
+    ) ?? "")
+      .split(/\r?\n/)
+      .filter(Boolean);
+    gitOrNull(["rebase", "--abort"], { cwd });
+    return {
+      ok: false,
+      rebased: false,
+      reason: "conflict",
+      source: resolved.source,
+      fetched: resolved.fetched,
+      baseCommit,
+      headBefore,
+      headAfter: gitOrNull(["rev-parse", "HEAD"], { cwd }) ?? headBefore,
+      conflicts,
+    };
+  }
+
+  return {
+    ok: true,
+    rebased: true,
+    reason: "rebased",
+    source: resolved.source,
+    fetched: resolved.fetched,
+    baseCommit,
+    headBefore,
+    headAfter: git(["rev-parse", "HEAD"], { cwd }),
+    conflicts: [],
+  };
+}
+

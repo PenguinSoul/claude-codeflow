@@ -380,6 +380,9 @@ Any state ──abandon──▶ abandoned
 | any → `blocked` | Reason recorded; no automatic retry beyond the configured policy |
 | `blocked → previous` | Human resolves the cause and runs `resume` |
 
+`verify` also runs on a `verified` task so a rebase can refresh evidence. Re-verification
+runs the same gates; it never bypasses one.
+
 ## Trust model
 
 `trust.json`:
@@ -540,11 +543,13 @@ The packet contains:
 
 - `resume` requires a `blocked` task. It records the resolution, clears the block, and
   returns to the previous state. It does not rerun gates automatically.
-- `finish` requires `merged`, or an explicit human `--confirm` when merge detection is
-  unavailable. It refuses a dirty worktree. It removes the worktree and optionally the
+- `finish` requires `merged`, or an explicit human `--confirm` when merge detection
+  is unavailable. When `gh` and a GitHub PR are available, the live PR state wins:
+  an open PR is refused even with `--confirm`. `--force` only bypasses a dirty
+  worktree, never the merge check. It removes the worktree and optionally the
   branch, then marks the task done.
-- `watch` defaults to a one-shot snapshot. `--wait` polls with an interval and timeout;
-  neither mode merges.
+- `watch` defaults to a one-shot snapshot. `--wait` polls with an interval and
+  timeout (`--timeout`, `--interval`); neither mode merges.
 
 ### `status --brief`
 
