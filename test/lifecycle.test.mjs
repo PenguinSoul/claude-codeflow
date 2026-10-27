@@ -237,6 +237,30 @@ test("finish trusts gh over --confirm and --force", async (t) => {
   assert.equal(existsSync(delivered.worktree), false);
 });
 
+test("finish keeps the PR state open when cleanup is refused", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+  });
+  writeFileSync(join(delivered.worktree, "dirty.txt"), "dirty\n");
+
+  const mergedEnv = fakeGhEnv(t, { prState: "MERGED", checks: ["SUCCESS"] });
+  const refused = await invoke(["finish", "--json"], dir, mergedEnv);
+  assert.equal(refused.code, 4);
+  assert.equal(refused.json.error.code, "E_DIRTY_TREE");
+
+  const prFile = join(
+    dir,
+    ".codeflow/state/tasks",
+    delivered.taskId,
+    "pr.json",
+  );
+  const pr = JSON.parse(readFileSync(prFile, "utf8"));
+  assert.equal(pr.state, "open");
+  assert.equal(existsSync(delivered.worktree), true);
+});
+
 test("watch --wait polls until checks settle", async (t) => {
   const { dir } = repoWithRemote(t);
   const delivered = await deliver(dir, t, {

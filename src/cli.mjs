@@ -1068,14 +1068,6 @@ function finishCommand(repo, config, flags, env) {
     force: flags.forceUnlock,
   });
   try {
-    if (confirmedByGh && detection.pr) {
-      writeJsonAtomic(taskFile(paths, task.id, "pr.json"), {
-        ...detection.pr,
-        state: "merged",
-        lastReadAt: nowIso(),
-      });
-    }
-
     let removedWorktree = false;
     if (task.worktree && fileExists(task.worktree)) {
       if (!isClean(task.worktree) && !flags.force) {
@@ -1097,6 +1089,14 @@ function finishCommand(repo, config, flags, env) {
         allowFail: true,
       });
       deletedBranch = result !== null;
+    }
+
+    if (confirmedByGh && detection.pr) {
+      writeJsonAtomic(taskFile(paths, task.id, "pr.json"), {
+        ...detection.pr,
+        state: "merged",
+        lastReadAt: nowIso(),
+      });
     }
 
     task.status = "done";
