@@ -136,8 +136,16 @@ export function lockPath(paths, taskId) {
   return path.join(taskDir(paths, taskId), "lock");
 }
 
+export function projectLockPath(paths) {
+  return path.join(paths.stateDir, "state.lock");
+}
+
 export function readLock(paths, taskId) {
   return readJsonSafe(lockPath(paths, taskId));
+}
+
+export function readProjectLock(paths) {
+  return readJsonSafe(projectLockPath(paths));
 }
 
 function pidAlive(pid) {
@@ -152,14 +160,14 @@ function pidAlive(pid) {
   }
 }
 
-export function acquireLock(paths, taskId, options = {}) {
+function acquireLockFile(file, options = {}) {
   const {
     command = "unknown",
     ttlMs = 2 * 60 * 60 * 1000,
     force = false,
+    label = "task",
   } = options;
-  ensureDir(taskDir(paths, taskId));
-  const file = lockPath(paths, taskId);
+  ensureDir(path.dirname(file));
   const payload = {
     pid: process.pid,
     host: hostname(),
@@ -176,7 +184,7 @@ export function acquireLock(paths, taskId, options = {}) {
     if (error.code !== "EEXIST") {
       throw error;
     }
-    const existing = readLock(paths, taskId);
+    const existing = readJsonSafe(file);
     const age = existing?.startedAt
       ? Date.now() - Date.parse(existing.startedAt)
       : Number.POSITIVE_INFINITY;
@@ -190,19 +198,19 @@ export function acquireLock(paths, taskId, options = {}) {
       } catch {
         // A concurrent process may have removed it.
       }
-      return acquireLock(paths, taskId, { command, ttlMs, force: false });
+      return acquireLockFile(file, { command, ttlMs, force: false, label });
     }
     throw new CodedError(
       ERROR_CODES.LOCKED,
-      "the task is locked by another process",
+      `the ${label} is locked by another process`,
       { lock: existing },
       "Wait for it to finish, or pass --force-unlock if it is stale.",
     );
   }
 }
 
-export function releaseLock(paths, taskId, options = {}) {
-  const existing = readLock(paths, taskId);
+function releaseLockFile(file, options = {}) {
+  const existing = readJsonSafe(file);
   if (!existing) {
     return false;
   }
@@ -214,14 +222,42 @@ export function releaseLock(paths, taskId, options = {}) {
     return false;
   }
   try {
-    unlinkSync(lockPath(paths, taskId));
+    unlinkSync(file);
     return true;
   } catch {
     return false;
   }
 }
 
+export function acquireLock(paths, taskId, options = {}) {
+  ensureDir(taskDir(paths, taskId));
+  return acquireLockFile(lockPath(paths, taskId), {
+    ...options,
+    label: "task",
+  });
+}
+
+export function acquireProjectLock(paths, options = {}) {
+  ensureState(paths);
+  return acquireLockFile(projectLockPath(paths), {
+    ...options,
+    label: "project state",
+  });
+}
+
+export function releaseLock(paths, taskId, options = {}) {
+  return releaseLockFile(lockPath(paths, taskId), options);
+}
+
+export function releaseProjectLock(paths, options = {}) {
+  return releaseLockFile(projectLockPath(paths), options);
+}
+
 export function forceUnlock(paths, taskId) {
   return releaseLock(paths, taskId, { force: true });
+}
+
+export function forceProjectUnlock(paths) {
+  return releaseProjectLock(paths, { force: true });
 }
 

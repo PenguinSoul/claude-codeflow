@@ -25,7 +25,12 @@ import {
   rebaseOntoBase,
   removeWorktree,
 } from "./git.mjs";
-import { failedAttention, scanAttention } from "./attention.mjs";
+import {
+  changedFiles,
+  failedAttention,
+  inferKind,
+  scanAttention,
+} from "./attention.mjs";
 import {
   buildEvidence,
   evidenceHash,
@@ -44,8 +49,10 @@ import {
 } from "./github.mjs";
 import { runGates, selectGates } from "./gates.mjs";
 import {
+  planApprovalHash,
   planPath,
   readPlan,
+  updatePlanStep,
   validatePlan,
   writePlanMarkdown,
   writePlanTemplate,
@@ -68,11 +75,12 @@ import {
 } from "./selfreview.mjs";
 import {
   acquireLock,
+  acquireProjectLock,
   ensureState,
-  forceUnlock,
   readActive,
   readTask,
   releaseLock,
+  releaseProjectLock,
   statePaths,
   taskDir,
   taskFile,
@@ -84,6 +92,7 @@ import {
   approvalState,
   approveTask,
   createTask,
+  durableUpdates,
   hashFile,
 } from "./task.mjs";
 import { assertTrusted, commandsFor, isTrusted, trustConfig } from "./trust.mjs";
@@ -96,6 +105,14 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from "./util.mjs";
+
+const TASK_LOCK_COMMANDS = new Set([
+  "plan",
+  "approve",
+  "verify",
+  "self-review",
+  "pr",
+]);
 
 const COMMANDS = new Set([
   "init",
@@ -125,6 +142,7 @@ Commands:
   new        Create a task and a task-spec
   approve    Approve the design or the plan by hash
   plan       Validate and render the task plan
+  plan step  Record step progress
   trust      Review and approve the gate commands
   verify     Run the gates and record evidence
   start      Create the task branch and worktree
@@ -151,9 +169,12 @@ Options:
   --allow-live Permit live gates (verify only)
   --retry      Retry a failing gate once (verify only)
   --init       Create a starter plan (plan only)
+  --status <s> Step status: pending, in_progress, done, blocked (plan step)
+  --summary <s> Step summary (plan step)
+  --result <s> Step result, e.g. "npm test -> pass" (plan step)
   --confirm    Confirm the merge (finish only)
   --delete-branch Delete the task branch (finish only)
-  --force-unlock Remove a stale task lock (start/resume/finish)
+  --force-unlock Remove a stale task or project lock
   --no-push    Render the PR body only; do not push or create a PR (pr only)
   --scope-drift <s> Record scope drift (self-review, repeatable)
   --closest-look <s> Record a closest-look area (self-review, repeatable)
@@ -188,6 +209,9 @@ function parseArgs(argv) {
     wait: false,
     timeout: null,
     interval: null,
+    status: null,
+    summary: null,
+    result: null,
     scopeDrift: [],
     closestLook: [],
     tier: null,
@@ -215,6 +239,33 @@ function parseArgs(argv) {
       flags.force = true;
     } else if (arg === "--init") {
       flags.init = true;
+    } else if (arg === "--status") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--status requires a value");
+      }
+      flags.status = value;
+      index += 1;
+    } else if (arg.startsWith("--status=")) {
+      flags.status = arg.slice("--status=".length);
+    } else if (arg === "--summary") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--summary requires a value");
+      }
+      flags.summary = value;
+      index += 1;
+    } else if (arg.startsWith("--summary=")) {
+      flags.summary = arg.slice("--summary=".length);
+    } else if (arg === "--result") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new CodedError(ERROR_CODES.USAGE, "--result requires a value");
+      }
+      flags.result = value;
+      index += 1;
+    } else if (arg.startsWith("--result=")) {
+      flags.result = arg.slice("--result=".length);
     } else if (arg === "--yes") {
       flags.yes = true;
     } else if (arg === "--full") {
@@ -547,6 +598,104 @@ function approveCommand(repo, config, flags, positional) {
   };
 }
 
+function planStepCommand(repo, config, flags, positional) {
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (task.status !== "active" && task.status !== "verified") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; step progress requires an active or verified task`,
+      { status: task.status },
+      "Run `codeflow start` first.",
+    );
+  }
+
+  const approval = task.approvals?.plan;
+  if (!approval) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "the plan is not approved",
+      { taskId },
+      "Run `codeflow approve plan` first.",
+    );
+  }
+  const plan = readPlan(paths, task.id);
+  if (planApprovalHash(plan) !== approval.hash) {
+    throw new CodedError(
+      ERROR_CODES.APPROVAL_STALE,
+      "the plan changed since approval",
+      { expected: approval.hash, actual: planApprovalHash(plan) },
+      "Re-approve the plan before recording progress.",
+    );
+  }
+
+  const stepId = positional[2];
+  if (!stepId) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "plan step requires a step id",
+      null,
+      "Example: codeflow plan step 1 --status done --result \"`npm test` → pass\"",
+    );
+  }
+  const patch = {
+    status: flags.status ?? undefined,
+    summary: flags.summary ?? undefined,
+    result: flags.result ?? undefined,
+    note: flags.note ?? undefined,
+  };
+  if (Object.values(patch).every((value) => value === undefined)) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      "plan step needs at least one change",
+      null,
+      "Pass --status, --summary, --result, or --note.",
+    );
+  }
+
+  const step = updatePlanStep(plan, stepId, patch);
+  writeJsonAtomic(planPath(paths, task.id), plan);
+  writePlanMarkdown(paths, task, plan);
+  const event = appendEvent(paths, task.id, "plan.step", actor(repo), {
+    stepId: step.id,
+    status: step.status,
+    result: step.result,
+  });
+  task.lastEventHash = event.hash;
+  writeTask(paths, task);
+
+  return {
+    data: {
+      taskId,
+      step: {
+        id: step.id,
+        title: step.title,
+        status: step.status,
+        result: step.result,
+      },
+      next: task.status === "verified" ? ["self-review", "pr"] : ["verify"],
+    },
+    taskId,
+  };
+}
+
 function planCommand(repo, config, flags) {
   const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
@@ -605,7 +754,7 @@ function planCommand(repo, config, flags) {
 
   const approval = task.approvals.plan;
   const stale = Boolean(
-    approval && hashFile(planPath(paths, task.id)) !== approval.hash,
+    approval && planApprovalHash(plan) !== approval.hash,
   );
   return {
     data: {
@@ -709,14 +858,32 @@ function verifyCommand(repo, config, flags) {
     );
   }
 
-  const gates = selectGates(config, task.kind, tier);
-  if (gates.length === 0) {
+  const worktree = taskTree(repo, task);
+  const inferredKind = inferKind(changedFiles(worktree, config.baseBranch));
+  let effectiveKind = task.kind;
+  const warnings = [];
+  if (inferredKind !== task.kind) {
+    effectiveKind = "mixed";
+    warnings.push({
+      code: "W_KIND_INFERRED",
+      message: `inferred ${inferredKind} from the diff; using the broader gate set for the ${task.kind} task`,
+    });
+  }
+
+  const gates = selectGates(config, effectiveKind, tier);
+  if (gates.length === 0 && effectiveKind !== "docs") {
     throw new CodedError(
       ERROR_CODES.CONFIG,
-      `no ${tier} gates apply to a ${task.kind} task`,
-      { tier, kind: task.kind },
+      `no ${tier} gates apply to a ${effectiveKind} task`,
+      { tier, kind: effectiveKind, inferredKind },
       "Edit .codeflow/config.json or choose a different tier.",
     );
+  }
+  if (gates.length === 0) {
+    warnings.push({
+      code: "W_NO_GATES",
+      message: "no gates apply to a docs-only task",
+    });
   }
 
   if (flags.dryRun) {
@@ -724,6 +891,9 @@ function verifyCommand(repo, config, flags) {
       data: {
         tier,
         dryRun: true,
+        kind: task.kind,
+        inferredKind,
+        effectiveKind,
         gates: gates.map((gate) => ({
           name: gate.name,
           command: gate.command,
@@ -732,10 +902,10 @@ function verifyCommand(repo, config, flags) {
         })),
       },
       taskId,
+      warnings,
     };
   }
 
-  const worktree = taskTree(repo, task);
   const startedAt = nowIso();
   const logDir = path.join(taskDir(paths, task.id), "logs");
   const run = runGates(gates, {
@@ -749,7 +919,7 @@ function verifyCommand(repo, config, flags) {
   const result = run.result === "pass" && failed.length === 0 ? "pass" : "fail";
 
   const evidence = buildEvidence({
-    root: repo.root,
+    root: repo.mainRoot,
     cwd: worktree,
     task,
     config,
@@ -759,6 +929,9 @@ function verifyCommand(repo, config, flags) {
     startedAt,
     finishedAt: nowIso(),
     result,
+    kind: task.kind,
+    inferredKind,
+    effectiveKind,
   });
   writeEvidence(paths, task, evidence);
 
@@ -795,14 +968,28 @@ function verifyCommand(repo, config, flags) {
     result,
     failed,
     tier,
+    kind: task.kind,
+    inferredKind,
+    effectiveKind,
   });
   task.lastEventHash = event.hash;
   writeTask(paths, task);
+
+  const resultWarnings = [...warnings];
+  if (noted.length > 0) {
+    resultWarnings.push({
+      code: "W_ATTENTION",
+      message: `attention items recorded: ${noted.join(", ")}`,
+    });
+  }
 
   return {
     data: {
       result,
       tier,
+      kind: task.kind,
+      inferredKind,
+      effectiveKind,
       gates: run.results.map((gate) => ({
         name: gate.name,
         exitCode: gate.exitCode,
@@ -813,21 +1000,13 @@ function verifyCommand(repo, config, flags) {
       })),
       attention,
       evidencePath: repoRelative(
-        repo.root,
+        repo.mainRoot,
         taskFile(paths, task.id, "evidence.json"),
       ),
       next,
     },
     taskId,
-    warnings:
-      noted.length > 0
-        ? [
-            {
-              code: "W_ATTENTION",
-              message: `attention items recorded: ${noted.join(", ")}`,
-            },
-          ]
-        : [],
+    warnings: resultWarnings,
     exitCode: result === "pass" ? EXIT.OK : EXIT.GATE,
   };
 }
@@ -1293,7 +1472,7 @@ function selfReviewCommand(repo, config, flags) {
   return {
     data: {
       reviewPath: repoRelative(
-        repo.root,
+        repo.mainRoot,
         taskFile(paths, task.id, "REVIEW.md"),
       ),
       diffHash: review.diffHash,
@@ -1470,7 +1649,30 @@ async function prCommand(repo, config, flags, env) {
   }
 
   const plan = readPlan(paths, task.id);
+  const openSteps = plan.steps.filter((step) => step.status !== "done");
+  if (openSteps.length > 0) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "the plan still has open steps",
+      {
+        open: openSteps.map((step) => ({
+          id: step.id,
+          status: step.status,
+          title: step.title,
+        })),
+      },
+      "Record progress with `codeflow plan step <id> --status done --result \"...\"`.",
+    );
+  }
   const taskSpec = readText(taskFile(paths, task.id, "TASK.md"));
+  if (!durableUpdates(taskSpec)) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "TASK.md has no durable updates record",
+      { taskId },
+      "Add a `## Durable updates` section listing the specs, README sections, or ADRs you changed, or write `Not durable — <reason>`.",
+    );
+  }
   const templateFile = path.resolve(worktree, config.pr.template);
   if (!isContained(worktree, templateFile)) {
     throw new CodedError(
@@ -1678,7 +1880,7 @@ async function watchCommand(repo, config, flags, env) {
       { status: task?.status ?? null },
     );
   }
-  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  let pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
   if (!pr || pr.mode !== "gh" || !pr.number) {
     throw new CodedError(
       ERROR_CODES.GH_MISSING,
@@ -1686,8 +1888,7 @@ async function watchCommand(repo, config, flags, env) {
       { mode: pr?.mode ?? null },
       "Use the compare URL printed by `codeflow pr`.",
     );
-  }
-  const worktree = taskTree(repo, task);
+  }  const worktree = taskTree(repo, task);
   let status = prView(worktree, pr.number, env);
   let checks = status.checks;
   let waited = false;
@@ -1734,12 +1935,21 @@ async function watchCommand(repo, config, flags, env) {
     }
     timedOut = checks.state === "pending" && Date.now() >= deadline;
   }
-  pr.checks = checks;
-  pr.mergeStateStatus = status.mergeStateStatus;
-  pr.reviewDecision = status.reviewDecision;
-  pr.headSha = status.headSha;
-  pr.lastReadAt = nowIso();
-  writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
+  acquireLock(paths, task.id, {
+    command: "watch",
+    force: flags.forceUnlock,
+  });
+  try {
+    pr = readJsonSafe(taskFile(paths, task.id, "pr.json")) ?? pr;
+    pr.checks = checks;
+    pr.mergeStateStatus = status.mergeStateStatus;
+    pr.reviewDecision = status.reviewDecision;
+    pr.headSha = status.headSha;
+    pr.lastReadAt = nowIso();
+    writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
+  } finally {
+    releaseLock(paths, task.id);
+  }
   return {
     data: {
       state: checks.state,
@@ -1789,7 +1999,6 @@ function commentsCommand(repo, config, flags, env) {
   }
   const worktree = taskTree(repo, task);
   const data = readComments(worktree, pr.number, env);
-  writeJsonAtomic(taskFile(paths, task.id, "comments.json"), data);
   const lines = [
     `# Review comments — ${task.id}`,
     "",
@@ -1811,7 +2020,19 @@ function commentsCommand(repo, config, flags, env) {
             `- ${comment.author} at \`${comment.path ?? "?"}:${comment.line ?? "?"}\`: ${comment.body}`,
         )),
   ];
-  writeTextAtomic(taskFile(paths, task.id, "COMMENTS.md"), `${lines.join("\n")}\n`);
+  acquireLock(paths, task.id, {
+    command: "comments",
+    force: flags.forceUnlock,
+  });
+  try {
+    writeJsonAtomic(taskFile(paths, task.id, "comments.json"), data);
+    writeTextAtomic(
+      taskFile(paths, task.id, "COMMENTS.md"),
+      `${lines.join("\n")}\n`,
+    );
+  } finally {
+    releaseLock(paths, task.id);
+  }
   return {
     data: {
       threads: data.comments.length,
@@ -1979,6 +2200,9 @@ export async function run(argv, io = {}) {
 
   const command = positional[0];
   const meta = { repoRoot: null, taskId: flags.task ?? null };
+  let lockPaths = null;
+  let heldTaskLock = null;
+  let heldProjectLock = false;
 
   try {
     if (!COMMANDS.has(command)) {
@@ -1996,6 +2220,7 @@ export async function run(argv, io = {}) {
     let projectConfig = null;
     let configError = null;
     let task = null;
+    let paths = null;
     if (command !== "init") {
       try {
         projectConfig = loadConfig(repo.mainRoot);
@@ -2010,7 +2235,7 @@ export async function run(argv, io = {}) {
         throw configError;
       }
       if (projectConfig) {
-        const paths = statePaths(repo.mainRoot, projectConfig);
+        paths = statePaths(repo.mainRoot, projectConfig);
         const active = readActive(paths);
         const taskId = flags.task ?? active?.taskId ?? null;
         meta.taskId = taskId;
@@ -2023,6 +2248,23 @@ export async function run(argv, io = {}) {
     const config = projectConfig
       ? configForCommand(repo, command, task, projectConfig)
       : null;
+
+    if (paths && task && TASK_LOCK_COMMANDS.has(command)) {
+      acquireLock(paths, task.id, {
+        command,
+        force: flags.forceUnlock,
+      });
+      lockPaths = paths;
+      heldTaskLock = task.id;
+    }
+    if (paths && (command === "new" || command === "trust")) {
+      acquireProjectLock(paths, {
+        command,
+        force: flags.forceUnlock,
+      });
+      lockPaths = paths;
+      heldProjectLock = true;
+    }
 
     let result;
     switch (command) {
@@ -2039,7 +2281,10 @@ export async function run(argv, io = {}) {
         break;
       }
       case "plan": {
-        result = planCommand(repo, config, flags);
+        result =
+          positional[1] === "step"
+            ? planStepCommand(repo, config, flags, positional)
+            : planCommand(repo, config, flags);
         break;
       }
       case "trust": {
@@ -2114,5 +2359,12 @@ export async function run(argv, io = {}) {
     const envelope = fail(command, coded.toJSON(), meta);
     emit(envelope, flags, out, err);
     return exitFor(coded.code);
+  } finally {
+    if (heldTaskLock && lockPaths) {
+      releaseLock(lockPaths, heldTaskLock);
+    }
+    if (heldProjectLock && lockPaths) {
+      releaseProjectLock(lockPaths);
+    }
   }
 }

@@ -45,11 +45,17 @@ export function buildEvidence(options) {
     startedAt,
     finishedAt,
     result,
+    kind,
+    inferredKind,
+    effectiveKind,
   } = options;
 
   return {
     schemaVersion: 1,
     taskId: task.id,
+    kind: kind ?? task.kind,
+    inferredKind: inferredKind ?? kind ?? task.kind,
+    effectiveKind: effectiveKind ?? kind ?? task.kind,
     treeHash: gitTreeHash(cwd),
     commit: gitCommit(cwd),
     branch: gitBranch(cwd),

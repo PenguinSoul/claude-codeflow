@@ -127,6 +127,59 @@ function isConfigPath(file) {
   );
 }
 
+const DOC_PATH = /\.(md|mdx|rst|txt)$/i;
+const INFRA_FILES = new Set([
+  "Dockerfile",
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "tsconfig.json",
+  "biome.json",
+]);
+
+function isDocsPath(file) {
+  return (
+    DOC_PATH.test(file) ||
+    file.startsWith("docs/") ||
+    /^LICENSE(\.|$)/.test(file) ||
+    /^README(\.|$)/i.test(file)
+  );
+}
+
+function isInfraPath(file) {
+  return (
+    isConfigPath(file) ||
+    isLockfile(file) ||
+    file.startsWith(".github/") ||
+    INFRA_FILES.has(file.split("/").at(-1))
+  );
+}
+
+export function inferKind(files) {
+  const kinds = new Set();
+  for (const entry of files) {
+    const file = typeof entry === "string" ? entry : entry.path;
+    if (!file) {
+      continue;
+    }
+    if (isTestPath(file)) {
+      kinds.add("test");
+    } else if (isDocsPath(file)) {
+      kinds.add("docs");
+    } else if (isInfraPath(file)) {
+      kinds.add("infra");
+    } else {
+      kinds.add("code");
+    }
+  }
+  if (kinds.size === 0) {
+    return "code";
+  }
+  if (kinds.size > 1) {
+    return "mixed";
+  }
+  return [...kinds][0];
+}
+
 function matches(text, patterns) {
   return patterns.some((pattern) => pattern.test(text));
 }

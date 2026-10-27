@@ -19,6 +19,9 @@ const taskSpec = [
   "",
   "## Design",
   "Guard the redirect when the token is present.",
+  "",
+  "## Durable updates",
+  "Updated docs/architecture.md with the redirect guard decision.",
 ].join("\n");
 
 const plan = {
@@ -122,6 +125,8 @@ test("renderPrBody fills sections from artifacts and only ticks evidence-backed 
   assert.match(body, /- \[ \] screenshots/);
   assert.match(body, /## Verification/);
   assert.match(body, /## Review attention/);
+  assert.match(body, /## Durable updates/);
+  assert.match(body, /Updated docs\/architecture\.md/);
   assert.match(body, /also renamed a helper/);
   assert.match(body, /the redirect guard/);
   assert.doesNotMatch(body, /^old$/m);

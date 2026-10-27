@@ -153,6 +153,9 @@ function bodyFor(heading, context) {
   if (name.includes("related issue")) {
     return task.issues.length > 0 ? task.issues.join(", ") : "None.";
   }
+  if (name.includes("durable")) {
+    return spec["durable updates"] || "Not recorded.";
+  }
   if (name.includes("checklist")) {
     return checklistBody(context.originalBody, evidence);
   }
@@ -181,9 +184,18 @@ export function renderPrBody(options) {
   const sections = parseTemplate(text);
   const spec = taskSections(taskSpec);
   const changes = [
-    ...(plan.steps ?? []).map(
-      (step) => `- [${step.status === "done" ? "x" : " "}] ${step.id}. ${step.title}`,
-    ),
+    ...(plan.steps ?? []).flatMap((step) => {
+      const lines = [
+        `- [${step.status === "done" ? "x" : " "}] ${step.id}. ${step.title}`,
+      ];
+      if (step.summary) {
+        lines.push(`  - ${step.summary}`);
+      }
+      if (step.result) {
+        lines.push(`  - Result: ${step.result}`);
+      }
+      return lines;
+    }),
     "",
     "Diff stat:",
     "```text",
@@ -217,9 +229,17 @@ export function renderPrBody(options) {
     const name = section.heading.toLowerCase();
     return name.includes("testing") || name.includes("verification");
   });
+  const hasDurable = sections.some((section) =>
+    section.heading.toLowerCase().includes("durable"),
+  );
 
   if (!hasVerification) {
     rendered.push(`## Verification\n\n${verification}`);
+  }
+  if (!hasDurable) {
+    rendered.push(
+      `## Durable updates\n\n${spec["durable updates"] || "Not recorded."}`,
+    );
   }
   if (!hasAttention) {
     rendered.push(`## Review attention\n\n${attention}`);

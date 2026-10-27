@@ -129,3 +129,19 @@ test("validateConfig rejects a PR template outside the repository", () => {
     validateConfig(config).some((error) => error.includes("pr.template")),
   );
 });
+
+test("validateConfig accepts a mixed gate", () => {
+  const config = defaultConfig({ baseBranch: "main", remote: "origin" });
+  config.gates = [
+    {
+      name: "mixed",
+      command: "node -e \"process.exit(0)\"",
+      cwd: ".",
+      tier: "fast",
+      kinds: ["mixed"],
+      required: true,
+      timeoutSec: 30,
+    },
+  ];
+  assert.deepEqual(validateConfig(config), []);
+});

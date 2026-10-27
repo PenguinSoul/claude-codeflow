@@ -66,7 +66,7 @@ The smallest useful build:
 2. **Grant trust.** Show every configured gate command and bind approval to the config
    hash. A changed config invalidates trust.
 3. **Create a task.** Write a lightweight task-spec (`Request`, `Product`, `Design`,
-   `Deferrals`), classify the change kind, and record related issues.
+   `Durable updates`, `Deferrals`), classify the change kind, and record related issues.
 4. **Approve the design.** Record who approved what, when, and a hash of the exact
    task-spec. Editing the task-spec invalidates the approval.
 5. **Plan the work.** Produce commit-sized steps with a verification line and a
@@ -76,7 +76,7 @@ The smallest useful build:
 7. **Verify.** Run gates by tier (`fast`, `full`, `live`) and change kind; capture
    command, exit code, duration, logs, tree hash, config hash, and dirty state.
 8. **Spotlight risk.** Scan the diff for test weakening, skipped tests, suppressions,
-   config/lockfile changes, scope drift, and large diffs. Report it; never silently
+   config/lockfile changes, and large diffs. Report it; never silently
    pass it.
 9. **Self-review.** Produce a review packet: diff stat, plan, evidence, attention
    items, scope drift, and the closest-look areas. A human signs it off.
@@ -153,7 +153,7 @@ Measure after real use, not in the abstract:
 | `gh` missing | Compare-URL fallback; clear diagnostic; no token storage |
 | `gh` installed but unauthenticated | Fail closed with `E_GH_AUTH`; never silently report green |
 | No CI configured | Checks state is `none`, never `success` |
-| Concurrent sessions | Per-task locks on `start`/`resume`/`finish` with stale detection; atomic writes; broader lock coverage is a follow-up |
+| Concurrent sessions | Per-task locks on every mutating command, a project lock for `new`/`trust`, and atomic writes |
 | State corruption after upgrade | Schema version is checked; migrations are a follow-up |
 | Secrets in gate logs | Local-only storage; documented warning; never upload |
 

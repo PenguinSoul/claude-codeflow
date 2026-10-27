@@ -81,7 +81,7 @@ All modules are ESM under `src/`. `bin/codeflow` is a thin executable that impor
 | `plan.mjs` | Plan schema, validation, render, step status | `task`, `util`, `contracts` |
 | `git.mjs` | Worktree, branch, rebase, clean, diffstat, tree hash | `util` |
 | `gates.mjs` | Gate selection, execution, timeouts, logs | `config`, `trust`, `util`, `contracts` |
-| `attention.mjs` | Diff scan for risk and scope drift | `git`, `util`, `contracts` |
+| `attention.mjs` | Diff scan for risk and change kind | `git`, `util`, `contracts` |
 | `evidence.mjs` | Build and validate evidence freshness | `git`, `config`, `gates`, `attention`, `util`, `contracts` |
 | `selfreview.mjs` | Review packet and sign-off | `git`, `evidence`, `attention`, `plan`, `util`, `contracts` |
 | `prbody.mjs` | Template parsing and body rendering | `task`, `plan`, `evidence`, `attention`, `util`, `contracts` |
@@ -198,21 +198,30 @@ across checkouts; reading config only from the project root verifies the wrong g
 **Rejected:** state per worktree (split brain); config from the project root (stale
 gate set); worktrees inside the repository (recursive scan and editor noise).
 
-### D9 — Multiple tasks; per-task locks
+### D9 — Multiple tasks; locks on every write
 
 Any number of tasks may exist. Each task has its own worktree, branch, and lock. The
 `active.json` pointer is only the default for commands that omit `--task`.
 
-**Why:** worktrees exist to run work in parallel; a repo-wide single-task rule would
-throw that away.
+Every command that mutates task state holds the task lock for the operation:
+`plan`, `plan step`, `approve`, `verify`, `self-review`, `pr`, `start`, `resume`, and
+`finish`. `new` and `trust` hold a project-state lock so task ids, the active pointer,
+and trust approvals cannot race. `watch` and `comments` hold the task lock only around
+their state write, not while polling or fetching.
 
-**Rejected:** one active task per repository; a global lock around all work.
+**Why:** worktrees exist to run work in parallel; a repo-wide single-task rule would
+throw that away. Locks keep parallel sessions from clobbering evidence, PR state, or
+each other's plan.
+
+**Rejected:** one active task per repository; a global lock around all work; locking
+only the git operations.
 
 ### D10 — The task-spec is temporary; durable knowledge is amended before the PR
 
 `TASK.md` lives in the task's local state. Before `pr`, the task must record which
 durable specs, README sections, or ADRs were updated, or explicitly mark the change as
-not durable. The PR body carries that record.
+not durable. `pr` refuses without a non-empty `## Durable updates` record. The PR body
+carries that record in a `## Durable updates` section.
 
 **Why:** otherwise the process looks disciplined while the repository learns nothing;
 the next task re-derives the same decisions.
@@ -223,8 +232,10 @@ repository; a spec graph requirement for every repository.
 ### D11 — The attention scan is a spotlight, not a verdict
 
 `verify` scans the diff for test weakening, skipped tests, suppressions, config and
-lockfile changes, scope drift, and large diffs. It records findings and surfaces them
-in the self-review packet. It does not silently fail the build or silently pass.
+lockfile changes, and large diffs. It records findings and surfaces them in the
+self-review packet. Scope drift and closest-look areas are recorded from explicit
+self-review flags, because intent cannot be inferred from paths alone. The scan does
+not silently fail the build or silently pass.
 
 **Why:** an agent can satisfy a gate by weakening the evidence. A human needs the
 spotlight; an automatic verdict would be both overconfident and easy to game.

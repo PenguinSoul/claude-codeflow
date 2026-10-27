@@ -4,6 +4,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultConfig } from "../src/config.mjs";
 import { writeEvidence } from "../src/evidence.mjs";
+import { planPath } from "../src/plan.mjs";
 import { findRepo } from "../src/repo.mjs";
 import {
   approveSelfReview,
@@ -12,6 +13,7 @@ import {
   selfReviewFresh,
 } from "../src/selfreview.mjs";
 import { ensureState, statePaths, taskFile } from "../src/state.mjs";
+import { writeJsonAtomic } from "../src/util.mjs";
 import { cleanup, git, tempRepo } from "./helpers.mjs";
 
 function setup(t) {
@@ -59,17 +61,23 @@ function setup(t) {
     },
   };
   writeEvidence(paths, task, evidence);
-  return { dir, repo, config, paths, task, evidence };
+  const plan = {
+    schemaVersion: 1,
+    taskId: task.id,
+    steps: [],
+  };
+  writeJsonAtomic(planPath(paths, task.id), plan);
+  return { dir, repo, config, paths, task, evidence, plan };
 }
 
 test("buildReviewPacket writes the packet and approveSelfReview signs it", (t) => {
-  const { dir, config, paths, task, evidence } = setup(t);
+  const { dir, config, paths, task, evidence, plan } = setup(t);
   const review = buildReviewPacket({
     paths,
     task,
     cwd: dir,
     base: config.baseBranch,
-    plan: { steps: [] },
+    plan,
     evidence,
     notes: "Looks good",
     scopeDrift: ["renamed a helper"],
@@ -97,13 +105,13 @@ test("buildReviewPacket writes the packet and approveSelfReview signs it", (t) =
 });
 
 test("editing an approved review packet invalidates the sign-off", (t) => {
-  const { dir, config, paths, task, evidence } = setup(t);
+  const { dir, config, paths, task, evidence, plan } = setup(t);
   buildReviewPacket({
     paths,
     task,
     cwd: dir,
     base: config.baseBranch,
-    plan: { steps: [] },
+    plan,
     evidence,
   });
   approveSelfReview(paths, task, {
@@ -128,14 +136,14 @@ test("editing an approved review packet invalidates the sign-off", (t) => {
 });
 
 test("a changed diff invalidates the self-review", (t) => {
-  const { dir, config, paths, task, evidence } = setup(t);
+  const { dir, config, paths, task, evidence, plan } = setup(t);
   git(dir, ["switch", "-c", "codeflow/test"]);
   buildReviewPacket({
     paths,
     task,
     cwd: dir,
     base: config.baseBranch,
-    plan: { steps: [] },
+    plan,
     evidence,
   });
   approveSelfReview(paths, task, {

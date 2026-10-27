@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
 import { gitOrNull } from "./git.mjs";
-import { planPath, readPlan, validatePlan } from "./plan.mjs";
+import { planApprovalHash, planPath, readPlan, validatePlan } from "./plan.mjs";
 import {
   nextTaskId,
   readTask,
@@ -75,6 +75,10 @@ export function missingTaskSections(markdown) {
   return ["request", "product", "design"].filter(
     (name) => !sections[name],
   );
+}
+
+export function durableUpdates(markdown) {
+  return strippedSections(markdown)["durable updates"] ?? "";
 }
 
 export function appendEvent(paths, taskId, type, eventActor, data = {}) {
@@ -222,7 +226,7 @@ export function approveTask(paths, task, target, options = {}) {
       );
     }
     task.approvals.plan = {
-      hash: hashFile(planPath(paths, task.id)),
+      hash: planApprovalHash(plan),
       approvedBy: by,
       approvedAt: nowIso(),
       note,
@@ -250,7 +254,14 @@ export function approvalState(paths, task) {
   const designFile = taskFile(paths, task.id, "TASK.md");
   const planFile = planPath(paths, task.id);
   const designCurrent = fileExists(designFile) ? hashFile(designFile) : null;
-  const planCurrent = fileExists(planFile) ? hashFile(planFile) : null;
+  let planCurrent = null;
+  if (fileExists(planFile)) {
+    try {
+      planCurrent = planApprovalHash(readPlan(paths, task.id));
+    } catch {
+      planCurrent = null;
+    }
+  }
 
   return {
     design: task.approvals?.design

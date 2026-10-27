@@ -57,7 +57,7 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
    separately.
 3. **Start a task.** `/codeflow:new "fix the login redirect"` creates a task and a
    lightweight `TASK.md`. Claude interviews the human, fills Request / Product / Design /
-   Deferrals, and runs `/codeflow:approve design`.
+   Durable updates / Deferrals, and runs `/codeflow:approve design`.
 4. **Plan.** `/codeflow:plan` writes commit-sized steps with a verification line and a
    Conventional Commit subject. The human approves the plan; progress is recorded
    separately.
@@ -66,7 +66,7 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
    Commands work from the project root or the task worktree.
 6. **Verify.** `/codeflow:verify` loads the config from the task worktree, checks trust
    for that exact hash, runs the gates, captures branch-bound evidence, and scans the
-   diff for test weakening, suppressions, config changes, scope drift, and large diffs.
+   diff for test weakening, suppressions, config changes, and large diffs.
    `--full` adds full gates; `--live` needs explicit permission.
 7. **Self-review.** `/codeflow:self-review` shows the packet: diff stat, plan status,
    evidence, attention items, scope drift, closest-look areas.
@@ -94,7 +94,7 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
 | `codeflow trust` | `/codeflow:trust` | Approve exact gate commands |
 | `codeflow new "<request>"` | `/codeflow:new` | Create task and `TASK.md` |
 | `codeflow approve design\|plan\|self-review` | `/codeflow:approve` | Hash-bound approval |
-| `codeflow plan` | `/codeflow:plan` | Validate and render the step plan |
+| `codeflow plan` | `/codeflow:plan` | Validate, render, and track the step plan |
 | `codeflow start` | `/codeflow:start` | Create branch and worktree |
 | `codeflow verify` | `/codeflow:verify` | Run gates, capture evidence, scan attention |
 | `codeflow self-review` | `/codeflow:self-review` | Build the self-review packet |
@@ -123,6 +123,7 @@ Local, gitignored via `.git/info/exclude`:
 .codeflow/state/
   active.json
   trust.json
+  state.lock
   tasks/<id>/
     task.json
     TASK.md
@@ -137,6 +138,7 @@ Local, gitignored via `.git/info/exclude`:
     comments.json
     COMMENTS.md
     events.jsonl
+    lock
     logs/<gate>.log
 ```
 
@@ -187,7 +189,7 @@ clean tree. Rebase may change the commit ID; the tree hash decides freshness.
 self-review hashes the diff and evidence. A change invalidates the approval.
 
 **Attention.** The diff scan surfaces test-file changes, skips, suppressions,
-config/lockfile changes, large diffs, scope drift, and closest-look areas. It is a
+config/lockfile changes, large diffs, and the closest-look areas. It is a
 spotlight for the human, never an automatic verdict.
 
 ## Plugin surface

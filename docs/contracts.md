@@ -253,6 +253,7 @@ or review state.
       "status": "pending",
       "commitSubject": "test(auth): reproduce the login redirect loop",
       "verification": "`npm test -- auth` → failing test added",
+      "result": "",
       "summary": "",
       "note": ""
     }
@@ -263,10 +264,16 @@ or review state.
 Rules:
 
 - `status` is `pending`, `in_progress`, `done`, or `blocked`.
-- `verification` is `check → result` or `not verified`.
+- `verification` is the planned check and is immutable under plan approval.
+- `result` is the actual outcome, in `check → result` form, and is mutable.
+- `summary` explains what changed and why; `note` is working detail.
 - `commitSubject` matches the repository's commit style; Conventional Commits by
   default.
 - A step that changes code must have a `commitSubject`.
+- Plan approval hashes only `id`, `title`, `commitSubject`, and `verification`.
+  Progress fields do not invalidate it. `codeflow plan step <id>` updates progress;
+  marking a step `done` requires `--result`. `pr` refuses while any step is not
+  `done`.
 
 ## Evidence
 
@@ -287,6 +294,9 @@ Rules:
   "startedAt": "2026-10-26T10:00:00Z",
   "finishedAt": "2026-10-26T10:02:00Z",
   "result": "pass",
+  "kind": "code",
+  "inferredKind": "mixed",
+  "effectiveKind": "mixed",
   "gates": [
     {
       "name": "lint",
@@ -335,6 +345,7 @@ dirty == false
 treeHash == current HEAD tree
 configHash == current config hash
 gateSetHash == current selected gate set
+branch == task.branch
 ```
 
 ## Self-review
@@ -347,6 +358,7 @@ gateSetHash == current selected gate set
   "taskId": "2026-10-26-fix-login",
   "diffHash": "sha256:...",
   "evidenceHash": "sha256:...",
+  "planHash": "sha256:...",
   "reviewedBy": "Name <email>",
   "reviewedAt": "2026-10-26T10:10:00Z",
   "notes": "Closest look: redirect loop guard.",
@@ -355,9 +367,11 @@ gateSetHash == current selected gate set
 ```
 
 `diffHash` is `sha256` over `git diff --binary <base>...HEAD` in a clean tree.
-`evidenceHash` is `sha256` over the canonical `evidence.json` bytes.
-`pr` requires a self-review whose `diffHash` and `evidenceHash` match the current diff
-and evidence.
+`evidenceHash` is `sha256` over the canonical `evidence.json` bytes. `planHash` covers
+the full plan, including progress, so updating a step after sign-off invalidates the
+review. `pr` requires a self-review whose `diffHash`, `evidenceHash`, and `planHash`
+match the current tree, evidence, and plan, and whose recorded approval hash matches
+the packet.
 
 ## Attention
 
@@ -546,6 +560,25 @@ as success.
 }
 ```
 
+### `plan step`
+
+```json
+{
+  "taskId": "2026-10-26-fix-login",
+  "step": {
+    "id": "1",
+    "title": "Reproduce the redirect loop",
+    "status": "done",
+    "result": "`npm test -- auth` → 1 failing test added"
+  },
+  "next": ["verify"]
+}
+```
+
+`plan step` requires an approved plan and an `active` or `verified` task. It updates
+only progress fields, writes `PLAN.md`, and records a `plan.step` event. A `done` step
+requires a non-empty `--result`.
+
 ### `start`
 
 ```json
@@ -562,6 +595,9 @@ as success.
 ```json
 {
   "result": "pass",
+  "kind": "code",
+  "inferredKind": "mixed",
+  "effectiveKind": "mixed",
   "gates": [
     { "name": "lint", "exitCode": 0, "durationMs": 1200, "required": true }
   ],
@@ -574,6 +610,12 @@ as success.
   "next": ["self-review", "pr"]
 }
 ```
+
+`verify` infers the change kind from the diff. When it differs from `task.kind`, it
+uses the broader `mixed` gate set and returns `W_KIND_INFERRED`. A docs-only task with
+no configured docs gate records zero gates, passes on attention, and returns
+`W_NO_GATES`; a non-docs task with no applicable gate is `E_CONFIG`. Evidence records
+all three kinds.
 
 ### `pr`
 
@@ -600,7 +642,8 @@ is stale: `pr` refuses with `E_APPROVAL_STALE` (`details.rebased: true`) until
 branch is pushed with `--force-with-lease`.
 
 The task worktree is required and must be on `task.branch`. The `headSha` reported by
-`gh` must equal the verified local HEAD; a mismatch is `E_PUSH_FAILED`.
+`gh` must equal the verified local HEAD; a mismatch is `E_PUSH_FAILED`. `pr` also
+refuses while any plan step is not `done`.
 
 With `--no-push`, the command is render-only:
 

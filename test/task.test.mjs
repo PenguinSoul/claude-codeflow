@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { defaultConfig } from "../src/config.mjs";
-import { planPath } from "../src/plan.mjs";
+import { planApprovalHash, planPath } from "../src/plan.mjs";
 import { findRepo } from "../src/repo.mjs";
 import {
   ensureState,
@@ -31,6 +31,9 @@ const SPEC = [
   "",
   "## Design",
   "Guard the redirect when the token is already present.",
+  "",
+  "## Durable updates",
+  "Not durable — test fixture.",
   "",
 ].join("\n");
 
@@ -122,7 +125,10 @@ test("plan approval requires a fresh design approval and a valid plan", (t) => {
 
   const planned = approveTask(paths, task, "plan", { by: "Test <t@t>" });
   assert.equal(planned.status, "planned");
-  assert.equal(planned.approvals.plan.hash, hashFile(planPath(paths, task.id)));
+  assert.equal(
+    planned.approvals.plan.hash,
+    planApprovalHash(PLAN(task.id)),
+  );
   assert.equal(approvalState(paths, planned).plan.stale, false);
 
   const edited = PLAN(task.id);
