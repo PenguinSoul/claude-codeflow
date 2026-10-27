@@ -1,11 +1,11 @@
 ---
 name: codeflow
-description: "Use when a git repository has .codeflow/config.json, or when the user asks for the codeflow L1 workflow: task-spec, plan, worktree, gates, evidence, self-review, and a pull request. Also use when a task must move from design to delivery without giving up human approval."
+description: "Use when a git repository has .codeflow/config.json, or when the user asks for the codeflow human-gated delivery workflow: task-spec, plan, worktree, gates, evidence, self-review, and a pull request. Also use when a task must move from design to delivery without giving up human approval."
 ---
 
 # Codeflow
 
-Codeflow is an L1 workflow. Humans decide; the CLI executes. You supply
+Codeflow is a human-gated delivery workflow. Humans decide; the CLI executes. You supply
 judgement, prose, and code. `codeflow` supplies state, isolation, gates,
 evidence, and delivery.
 
@@ -59,18 +59,23 @@ These are hard stops, not advice.
 - **Never approve on your own.** Design, plan, and self-review approvals belong
   to the human. Ask, then run the approval command.
 - **Never fabricate evidence.** A gate result exists only if `codeflow verify`
-  recorded it. "Tests pass" without a JSON result is a lie.
+  recorded it. "Tests pass" without a JSON result is a lie. A repository with no
+  checks reports `none`; do not call it green.
 - **Never skip a gate.** Not "small", not "obvious", not "already ran once" when
   the tree changed.
 - **Never weaken a gate.** Do not edit tests, add skips, add `@ts-ignore`,
   `@ts-expect-error`, `eslint-disable`, `biome-ignore`, or `as any` to pass.
-- **Never work around trust.** If the config is untrusted or stale, stop and ask
-  the human to review the commands.
-- **Never touch the base branch.** Work only in the task worktree and
-  `codeflow/<id>` branch.
+- **Never trust repository-supplied state.** `.codeflow/state` must never be tracked.
+  If `codeflow` reports `E_STATE_TRACKED`, stop; do not try to work around it.
+- **Never work around trust.** If the config under test is untrusted or stale, stop
+  and ask the human to review the commands.
+- **Never ignore the task tree.** `verify` and `pr` require the task worktree on
+  `task.branch`. A missing or mismatched worktree is a stop, not a fallback.
+- **Never touch the base branch.** Work in the task worktree and `codeflow/<id>`
+  branch.
 - **Never finish an unmerged task.** When `gh` reports the PR open, `finish`
   refuses even with `--confirm` or `--force`. `--force` only bypasses a dirty
-  worktree.
+  worktree; a `gh` failure is blocked, not confirmation.
 - **Never guess at a conflict.** A rebase conflict, ambiguous requirement, or
   security concern becomes `blocked`; ask the human.
 - **Never hide a failure.** Report the error code, the failing gate, and the
@@ -98,16 +103,22 @@ human. They are not an automatic verdict, but they are never hidden.
 The CLI returns a coded error, a message, details, and a hint. Report all four.
 Common codes:
 
-- `E_TRUST_REQUIRED` / `E_TRUST_STALE`: review and approve the commands.
+- `E_TRUST_REQUIRED` / `E_TRUST_STALE`: review and approve the commands for the
+  exact config hash under test.
+- `E_STATE_TRACKED`: stop. Local state must not be committed, and a repository
+  cannot grant its own trust.
+- `E_WORKTREE_MISSING` / `E_WORKTREE_MISMATCH`: stop. Run `codeflow start` or check
+  out the task branch; never verify the primary checkout as the task tree.
 - `E_STATE_CONFLICT`: the task is not in the right state; read `status`.
-- `E_APPROVAL_STALE`: an approved artifact changed; re-approve it. After a
-  rebase, run `verify`, `self-review`, and `approve self-review` again.
+- `E_APPROVAL_STALE`: an approved artifact or the self-review packet changed;
+  re-approve it. After a rebase, run `verify`, `self-review`, and
+  `approve self-review` again.
 - `E_GATE_FAILED` / `E_GATE_TIMEOUT`: fix the cause; do not weaken the gate.
 - `E_DIRTY_TREE`: commit or discard the changes; do not force without the human.
 - `E_REBASE_CONFLICT`: the task is blocked; ask the human to resolve the conflict,
   then run `resume`.
-- `E_GH_MISSING` / `E_GH_AUTH`: use the compare URL or fix `gh`.
-- `E_BLOCKED` / a `blocked` status: stop and ask the human.
+- `E_GH_MISSING` / `E_GH_AUTH`: use the compare URL when `gh` is absent, or fix
+  `gh` auth. A `gh` failure while a PR exists is blocked, not confirmation.
 
 ## Task artifacts
 

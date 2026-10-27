@@ -1,10 +1,11 @@
 # codeflow design docs
 
-Status: **draft for review**. No implementation has started.
+Status: **implemented; design record**. The review gates below remain the
+approval checklist for the current design.
 
 | Document | What it answers |
 | --- | --- |
-| [`goal-and-requirements.md`](goal-and-requirements.md) | What codeflow is, who it serves, the L1 boundary, non-goals, success metrics, failure modes |
+| [`goal-and-requirements.md`](goal-and-requirements.md) | What codeflow is, who it serves, the human boundary, non-goals, success metrics, failure modes |
 | [`architecture.md`](architecture.md) | Topology, ownership, module map, numbered decisions, invariants, state machine, trust, evidence, safety, testing |
 | [`contracts.md`](contracts.md) | The JSON wire: envelope, exit codes, errors, and every artifact schema |
 | [`DESIGN.md`](DESIGN.md) | The readable integrated design: flow, commands, artifacts, plugin surface, implementation order |
@@ -21,7 +22,7 @@ Status: **draft for review**. No implementation has started.
 Implementation starts only after these are accepted:
 
 - [ ] Goal, audience, and non-goals.
-- [ ] L1 boundary and human gates.
+- [ ] Human boundary and human gates.
 - [ ] Trust model (explicit, config-hash-bound).
 - [ ] Evidence freshness (tree-based, rebase-safe).
 - [ ] Command surface and JSON contracts.

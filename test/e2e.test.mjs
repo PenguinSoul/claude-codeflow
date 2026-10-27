@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { cleanup, fakeGhEnv, tempRepo } from "./helpers.mjs";
+import { cleanup, fakeGhEnv, git, tempRepo } from "./helpers.mjs";
 
 const cli = fileURLToPath(new URL("../bin/codeflow", import.meta.url));
 
@@ -50,11 +50,17 @@ const SPEC = [
   "",
 ].join("\n");
 
-test("the built binary runs the full L1 flow in a temporary repository", async (t) => {
+test("the built binary runs the full human-gated flow in a temporary repository", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
   const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-e2e-wt-"));
   t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+  const bare = mkdtempSync(join(tmpdir(), "codeflow-e2e-origin-"));
+  t.after(() => rmSync(bare, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--bare", "-b", "main", bare], {
+    stdio: "ignore",
+  });
+  execFileSync("git", ["remote", "set-url", "origin", bare], { cwd: dir });
   const env = fakeGhEnv(t);
 
   const init = runCli(["init", "--json"], dir);
@@ -75,6 +81,9 @@ test("the built binary runs the full L1 flow in a temporary repository", async (
     },
   ];
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  git(dir, ["add", ".codeflow/config.json"]);
+  git(dir, ["commit", "-m", "test: commit codeflow config"]);
+  git(dir, ["push", "-u", "origin", "main"]);
 
   assert.equal(runCli(["trust", "--yes", "--json"], dir).code, 0);
 
@@ -123,7 +132,7 @@ test("the built binary runs the full L1 flow in a temporary repository", async (
     0,
   );
 
-  const pr = runCli(["pr", "--no-push", "--json"], dir, env);
+  const pr = runCli(["pr", "--json"], dir, env);
   assert.equal(pr.code, 0);
   assert.equal(pr.json.data.number, 7);
 

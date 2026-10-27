@@ -18,6 +18,7 @@ import {
 import { runDoctor } from "./doctor.mjs";
 import {
   addWorktree,
+  assertWorktreeBranch,
   git,
   gitOrNull,
   isClean,
@@ -39,7 +40,6 @@ import {
   createOrUpdatePr,
   hasGh,
   prView,
-  readChecks,
   readComments,
 } from "./github.mjs";
 import { runGates, selectGates } from "./gates.mjs";
@@ -52,7 +52,12 @@ import {
 } from "./plan.mjs";
 import { renderPrBody, titleFor } from "./prbody.mjs";
 import { render, renderBrief, renderError } from "./render.mjs";
-import { ensureExcluded, findRepo, repoRelative } from "./repo.mjs";
+import {
+  assertStateNotTracked,
+  ensureExcluded,
+  findRepo,
+  repoRelative,
+} from "./repo.mjs";
 import {
   approveSelfReview,
   buildReviewPacket,
@@ -67,7 +72,6 @@ import {
   forceUnlock,
   readActive,
   readTask,
-  readTrust,
   releaseLock,
   statePaths,
   taskDir,
@@ -82,9 +86,10 @@ import {
   createTask,
   hashFile,
 } from "./task.mjs";
-import { assertTrusted, commandsFor, trustConfig } from "./trust.mjs";
+import { assertTrusted, commandsFor, isTrusted, trustConfig } from "./trust.mjs";
 import {
   fileExists,
+  isContained,
   nowIso,
   readJsonSafe,
   readText,
@@ -92,7 +97,25 @@ import {
   writeTextAtomic,
 } from "./util.mjs";
 
-const HELP = `codeflow ${CLI_VERSION} — L1 workflow executor
+const COMMANDS = new Set([
+  "init",
+  "new",
+  "approve",
+  "plan",
+  "trust",
+  "verify",
+  "start",
+  "resume",
+  "finish",
+  "self-review",
+  "pr",
+  "watch",
+  "comments",
+  "status",
+  "doctor",
+]);
+
+const HELP = `codeflow ${CLI_VERSION} — human-gated delivery workflow
 
 Usage:
   codeflow <command> [options]
@@ -131,7 +154,7 @@ Options:
   --confirm    Confirm the merge (finish only)
   --delete-branch Delete the task branch (finish only)
   --force-unlock Remove a stale task lock (start/resume/finish)
-  --no-push    Render the PR without pushing (pr only)
+  --no-push    Render the PR body only; do not push or create a PR (pr only)
   --scope-drift <s> Record scope drift (self-review, repeatable)
   --closest-look <s> Record a closest-look area (self-review, repeatable)
   --wait       Wait for checks (watch only)
@@ -329,19 +352,20 @@ function emit(envelope, flags, out, err) {
 }
 
 function initCommand(repo, flags) {
-  const file = configPath(repo.root);
+  const file = configPath(repo.mainRoot);
   if (fileExists(file) && !flags.force) {
-    const config = loadConfig(repo.root);
-    const paths = statePaths(repo.root, config);
+    const config = loadConfig(repo.mainRoot);
+    repo.projectConfig = config;
+    const paths = statePaths(repo.mainRoot, config);
     ensureState(paths);
     ensureExcluded(repo);
     return {
       data: {
-        repoRoot: repo.root,
+        repoRoot: repo.mainRoot,
         baseBranch: config.baseBranch,
         remote: config.remote,
-        configPath: repoRelative(repo.root, file),
-        excludePath: repoRelative(repo.root, repo.excludePath),
+        configPath: repoRelative(repo.mainRoot, file),
+        excludePath: repoRelative(repo.mainRoot, repo.excludePath),
         detected: config.gates.map((gate) => ({
           name: gate.name,
           command: gate.command,
@@ -361,11 +385,11 @@ function initCommand(repo, flags) {
   if (flags.dryRun) {
     return {
       data: {
-        repoRoot: repo.root,
+        repoRoot: repo.mainRoot,
         baseBranch: config.baseBranch,
         remote: config.remote,
-        configPath: repoRelative(repo.root, file),
-        excludePath: repoRelative(repo.root, repo.excludePath),
+        configPath: repoRelative(repo.mainRoot, file),
+        excludePath: repoRelative(repo.mainRoot, repo.excludePath),
         detected: config.gates.map((gate) => ({
           name: gate.name,
           command: gate.command,
@@ -377,8 +401,9 @@ function initCommand(repo, flags) {
     };
   }
 
-  writeConfig(repo.root, config);
-  const paths = statePaths(repo.root, config);
+  writeConfig(repo.mainRoot, config);
+  repo.projectConfig = config;
+  const paths = statePaths(repo.mainRoot, config);
   ensureState(paths);
   ensureExcluded(repo);
 
@@ -389,14 +414,24 @@ function initCommand(repo, flags) {
       message: "no gates detected; edit .codeflow/config.json before verify",
     });
   }
+  if (
+    !gitOrNull(["ls-files", "--", ".codeflow/config.json"], {
+      cwd: repo.mainRoot,
+    })
+  ) {
+    warnings.push({
+      code: "W_CONFIG_UNCOMMITTED",
+      message: "commit .codeflow/config.json before `codeflow start`",
+    });
+  }
 
   return {
     data: {
-      repoRoot: repo.root,
+      repoRoot: repo.mainRoot,
       baseBranch: config.baseBranch,
       remote: config.remote,
-      configPath: repoRelative(repo.root, file),
-      excludePath: repoRelative(repo.root, repo.excludePath),
+      configPath: repoRelative(repo.mainRoot, file),
+      excludePath: repoRelative(repo.mainRoot, repo.excludePath),
       detected: config.gates.map((gate) => ({
         name: gate.name,
         command: gate.command,
@@ -417,7 +452,7 @@ function newCommand(repo, config, flags, positional) {
       'Example: codeflow new "Fix the login redirect"',
     );
   }
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const task = createTask(paths, repo, config, {
     title,
     kind: flags.kind ?? "code",
@@ -426,8 +461,8 @@ function newCommand(repo, config, flags, positional) {
   return {
     data: {
       taskId: task.id,
-      taskPath: repoRelative(repo.root, taskDir(paths, task.id)),
-      taskSpecPath: repoRelative(repo.root, taskFile(paths, task.id, "TASK.md")),
+      taskPath: repoRelative(repo.mainRoot, taskDir(paths, task.id)),
+      taskSpecPath: repoRelative(repo.mainRoot, taskFile(paths, task.id, "TASK.md")),
       kind: task.kind,
       next: ["edit TASK.md", "approve design"],
     },
@@ -454,7 +489,7 @@ function approveCommand(repo, config, flags, positional) {
     );
   }
 
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -476,8 +511,7 @@ function approveCommand(repo, config, flags, positional) {
 
   const by = flags.by ?? actor(repo);
   if (target === "self-review") {
-    const worktree =
-      task.worktree && fileExists(task.worktree) ? task.worktree : repo.root;
+    const worktree = taskTree(repo, task);
     const { task: updated, review } = approveSelfReview(paths, task, {
       cwd: worktree,
       base: config.baseBranch,
@@ -514,7 +548,7 @@ function approveCommand(repo, config, flags, positional) {
 }
 
 function planCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -540,7 +574,7 @@ function planCommand(repo, config, flags) {
     writePlanMarkdown(paths, task, plan);
     return {
       data: {
-        planPath: repoRelative(repo.root, planPath(paths, task.id)),
+        planPath: repoRelative(repo.mainRoot, planPath(paths, task.id)),
         steps: plan.steps.length,
         approved: Boolean(task.approvals.plan),
         next: ["edit plan.json", "approve plan"],
@@ -575,7 +609,7 @@ function planCommand(repo, config, flags) {
   );
   return {
     data: {
-      planPath: repoRelative(repo.root, planPath(paths, task.id)),
+      planPath: repoRelative(repo.mainRoot, planPath(paths, task.id)),
       steps: plan.steps.length,
       approved: Boolean(approval) && !stale,
       next: stale || !approval ? ["approve plan"] : ["start"],
@@ -593,7 +627,7 @@ function planCommand(repo, config, flags) {
 }
 
 function trustCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const commands = commandsFor(config);
   if (!flags.yes) {
     return {
@@ -627,7 +661,7 @@ function trustCommand(repo, config, flags) {
 }
 
 function verifyCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -701,8 +735,7 @@ function verifyCommand(repo, config, flags) {
     };
   }
 
-  const worktree =
-    task.worktree && fileExists(task.worktree) ? task.worktree : repo.root;
+  const worktree = taskTree(repo, task);
   const startedAt = nowIso();
   const logDir = path.join(taskDir(paths, task.id), "logs");
   const run = runGates(gates, {
@@ -800,7 +833,7 @@ function verifyCommand(repo, config, flags) {
 }
 
 function startCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -864,11 +897,22 @@ function startCommand(repo, config, flags) {
     force: flags.forceUnlock,
   });
   try {
-    const result = addWorktree(repo.root, {
+    const result = addWorktree(repo.mainRoot, {
       worktree: task.worktree,
       branch: task.branch,
       base: config.baseBranch,
     });
+    assertWorktreeBranch(task.worktree, task.branch);
+    if (
+      !fileExists(path.join(task.worktree, ".codeflow", "config.json"))
+    ) {
+      throw new CodedError(
+        ERROR_CODES.CONFIG,
+        "the task worktree does not contain .codeflow/config.json",
+        { worktree: task.worktree },
+        "Commit .codeflow/config.json to the base branch before `codeflow start`.",
+      );
+    }
     task.status = "active";
     const event = appendEvent(paths, task.id, "task.started", actor(repo), {
       branch: task.branch,
@@ -899,7 +943,7 @@ function startCommand(repo, config, flags) {
         worktree: task.worktree,
         baseCommit: gitOrNull(
           ["rev-parse", "--short", config.baseBranch],
-          { cwd: repo.root },
+          { cwd: repo.mainRoot },
         ),
         reused: !result.created,
         reusedBranch: result.reusedBranch,
@@ -913,7 +957,7 @@ function startCommand(repo, config, flags) {
 }
 
 function resumeCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -976,7 +1020,11 @@ function mergeDetection(repo, task, paths, env) {
     return { available: false, merged: false, reason: "gh is not installed" };
   }
   try {
-    const view = prView(taskWorktree(repo, task), pr.number, env);
+    const view = prView(
+      taskWorktree(repo, task, { required: false }),
+      pr.number,
+      env,
+    );
     return {
       available: true,
       merged: String(view.state ?? "").toUpperCase() === "MERGED",
@@ -988,13 +1036,15 @@ function mergeDetection(repo, task, paths, env) {
     return {
       available: false,
       merged: false,
+      error: true,
+      code: error.code ?? ERROR_CODES.GH_AUTH,
       reason: error.message,
     };
   }
 }
 
 function finishCommand(repo, config, flags, env) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -1018,6 +1068,14 @@ function finishCommand(repo, config, flags, env) {
     task.status === "pr_open"
       ? mergeDetection(repo, task, paths, env)
       : { available: false, merged: false, reason: `task is ${task.status}` };
+  if (detection.error) {
+    throw new CodedError(
+      ERROR_CODES.GH_AUTH,
+      "could not read the pull request merge state",
+      { reason: detection.reason, pr: detection.pr?.number ?? null },
+      "Fix `gh auth status` or the network, then retry. Do not use --confirm to bypass a failed merge check.",
+    );
+  }
   const confirmedByStatus = task.status === "merged";
   const confirmedByGh = detection.available && detection.merged;
   const confirmedByHuman = flags.confirm && !detection.available;
@@ -1078,14 +1136,14 @@ function finishCommand(repo, config, flags, env) {
           "Commit or discard them, or pass --force.",
         );
       }
-      removeWorktree(repo.root, task.worktree, { force: flags.force });
+      removeWorktree(repo.mainRoot, task.worktree, { force: flags.force });
       removedWorktree = true;
     }
 
     let deletedBranch = false;
     if (flags.deleteBranch && task.branch) {
       const result = git(["branch", "-D", task.branch], {
-        cwd: repo.root,
+        cwd: repo.mainRoot,
         allowFail: true,
       });
       deletedBranch = result !== null;
@@ -1124,12 +1182,57 @@ function finishCommand(repo, config, flags, env) {
   }
 }
 
-function taskWorktree(repo, task) {
-  return task.worktree && fileExists(task.worktree) ? task.worktree : repo.root;
+const TASK_TREE_COMMANDS = new Set([
+  "status",
+  "verify",
+  "self-review",
+  "approve",
+  "pr",
+  "watch",
+  "comments",
+]);
+
+function configForCommand(repo, command, task, projectConfig) {
+  if (command === "trust") {
+    const localConfig = path.join(repo.root, ".codeflow", "config.json");
+    return repo.root !== repo.mainRoot && fileExists(localConfig)
+      ? loadConfig(repo.root)
+      : projectConfig;
+  }
+  if (
+    TASK_TREE_COMMANDS.has(command) &&
+    task?.worktree &&
+    fileExists(task.worktree)
+  ) {
+    return loadConfig(task.worktree);
+  }
+  return projectConfig;
+}
+
+function taskWorktree(repo, task, options = {}) {
+  const { required = true } = options;
+  if (task.worktree && fileExists(task.worktree)) {
+    return task.worktree;
+  }
+  if (!required) {
+    return repo.mainRoot;
+  }
+  throw new CodedError(
+    ERROR_CODES.WORKTREE_MISSING,
+    "the task worktree is missing",
+    { taskId: task.id, worktree: task.worktree },
+    "Run `codeflow start` to recreate it, or `codeflow finish` if the task is complete.",
+  );
+}
+
+function taskTree(repo, task) {
+  const worktree = taskWorktree(repo, task);
+  assertWorktreeBranch(worktree, task.branch);
+  return worktree;
 }
 
 function selfReviewCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -1166,7 +1269,7 @@ function selfReviewCommand(repo, config, flags) {
     );
   }
 
-  const worktree = taskWorktree(repo, task);
+  const worktree = taskTree(repo, task);
   const plan = readPlan(paths, task.id);
   const review = buildReviewPacket({
     paths,
@@ -1213,7 +1316,7 @@ function selfReviewCommand(repo, config, flags) {
 }
 
 async function prCommand(repo, config, flags, env) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -1259,7 +1362,7 @@ async function prCommand(repo, config, flags, env) {
     );
   }
 
-  const worktree = taskWorktree(repo, task);
+  const worktree = taskTree(repo, task);
   if (isDirty(worktree)) {
     throw new CodedError(
       ERROR_CODES.DIRTY_TREE,
@@ -1332,6 +1435,7 @@ async function prCommand(repo, config, flags, env) {
       configHash: hash,
       gateSetHash: evidence.gateSetHash,
       dirty: false,
+      branch: task.branch,
     })
   ) {
     throw new CodedError(
@@ -1367,7 +1471,15 @@ async function prCommand(repo, config, flags, env) {
 
   const plan = readPlan(paths, task.id);
   const taskSpec = readText(taskFile(paths, task.id, "TASK.md"));
-  const templateFile = path.resolve(repo.root, config.pr.template);
+  const templateFile = path.resolve(worktree, config.pr.template);
+  if (!isContained(worktree, templateFile)) {
+    throw new CodedError(
+      ERROR_CODES.CONFIG,
+      "pr.template escapes the task worktree",
+      { template: config.pr.template },
+      "Use a repository-relative template path.",
+    );
+  }
   const template = fileExists(templateFile) ? readText(templateFile) : "";
   const body = renderPrBody({
     template,
@@ -1389,10 +1501,29 @@ async function prCommand(repo, config, flags, env) {
       data: {
         mode,
         title,
-        bodyPath: repoRelative(repo.root, bodyPath),
+        bodyPath: repoRelative(repo.mainRoot, bodyPath),
         dryRun: true,
       },
       taskId,
+    };
+  }
+
+  if (flags.noPush) {
+    return {
+      data: {
+        mode,
+        title,
+        bodyPath: repoRelative(repo.mainRoot, bodyPath),
+        rendered: true,
+        pushed: false,
+      },
+      taskId,
+      warnings: [
+        {
+          code: "W_RENDER_ONLY",
+          message: "rendered the pull request body; nothing was pushed or created",
+        },
+      ],
     };
   }
 
@@ -1428,6 +1559,15 @@ async function prCommand(repo, config, flags, env) {
       bodyPath,
       env,
     });
+    const localHead = git(["rev-parse", "HEAD"], { cwd: worktree });
+    if (created.headSha && created.headSha !== localHead) {
+      throw new CodedError(
+        ERROR_CODES.PUSH_FAILED,
+        "the pull request head does not match the verified commit",
+        { localHead, prHead: created.headSha },
+        "Push the task branch and retry; do not deliver an unverified head.",
+      );
+    }
     pr = {
       schemaVersion: 1,
       taskId: task.id,
@@ -1436,17 +1576,19 @@ async function prCommand(repo, config, flags, env) {
       url: created.url,
       state: String(created.state ?? "OPEN").toLowerCase(),
       title,
-      bodyPath: repoRelative(repo.root, bodyPath),
-      headSha: created.headSha ?? gitOrNull(["rev-parse", "--short", "HEAD"], { cwd: worktree }),
+      bodyPath: repoRelative(repo.mainRoot, bodyPath),
+      headSha: localHead,
       baseBranch: config.baseBranch,
       compareUrl: null,
+      mergeStateStatus: created.mergeStateStatus ?? null,
+      reviewDecision: created.reviewDecision ?? null,
       createdAt: nowIso(),
       lastReadAt: nowIso(),
       checks: created.checks,
     };
   } else {
     const remoteUrl = gitOrNull(["remote", "get-url", config.remote ?? "origin"], {
-      cwd: repo.root,
+      cwd: repo.mainRoot,
     });
     pr = {
       schemaVersion: 1,
@@ -1456,8 +1598,8 @@ async function prCommand(repo, config, flags, env) {
       url: null,
       state: "open",
       title,
-      bodyPath: repoRelative(repo.root, bodyPath),
-      headSha: gitOrNull(["rev-parse", "--short", "HEAD"], { cwd: worktree }),
+      bodyPath: repoRelative(repo.mainRoot, bodyPath),
+      headSha: git(["rev-parse", "HEAD"], { cwd: worktree }),
       baseBranch: config.baseBranch,
       compareUrl: compareUrl(remoteUrl, config.baseBranch, task.branch),
       createdAt: nowIso(),
@@ -1522,7 +1664,7 @@ async function prCommand(repo, config, flags, env) {
 }
 
 async function watchCommand(repo, config, flags, env) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -1545,8 +1687,9 @@ async function watchCommand(repo, config, flags, env) {
       "Use the compare URL printed by `codeflow pr`.",
     );
   }
-  const worktree = taskWorktree(repo, task);
-  let checks = readChecks(worktree, pr.number, env);
+  const worktree = taskTree(repo, task);
+  let status = prView(worktree, pr.number, env);
+  let checks = status.checks;
   let waited = false;
   let timedOut = false;
   let polls = 0;
@@ -1584,19 +1727,26 @@ async function watchCommand(repo, config, flags, env) {
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(interval, remaining)),
       );
-      checks = readChecks(worktree, pr.number, env);
+      status = prView(worktree, pr.number, env);
+      checks = status.checks;
       waited = true;
       polls += 1;
     }
     timedOut = checks.state === "pending" && Date.now() >= deadline;
   }
   pr.checks = checks;
+  pr.mergeStateStatus = status.mergeStateStatus;
+  pr.reviewDecision = status.reviewDecision;
+  pr.headSha = status.headSha;
   pr.lastReadAt = nowIso();
   writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
   return {
     data: {
       state: checks.state,
       checks,
+      mergeStateStatus: status.mergeStateStatus,
+      reviewDecision: status.reviewDecision,
+      headSha: status.headSha,
       lastReadAt: pr.lastReadAt,
       waited,
       polls,
@@ -1615,7 +1765,7 @@ async function watchCommand(repo, config, flags, env) {
 }
 
 function commentsCommand(repo, config, flags, env) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId;
   if (!taskId) {
@@ -1637,7 +1787,7 @@ function commentsCommand(repo, config, flags, env) {
       { mode: pr?.mode ?? null },
     );
   }
-  const worktree = taskWorktree(repo, task);
+  const worktree = taskTree(repo, task);
   const data = readComments(worktree, pr.number, env);
   writeJsonAtomic(taskFile(paths, task.id, "comments.json"), data);
   const lines = [
@@ -1666,7 +1816,7 @@ function commentsCommand(repo, config, flags, env) {
     data: {
       threads: data.comments.length,
       reviews: data.reviews.length,
-      path: repoRelative(repo.root, taskFile(paths, task.id, "COMMENTS.md")),
+      path: repoRelative(repo.mainRoot, taskFile(paths, task.id, "COMMENTS.md")),
       resolved: 0,
       unresolved: data.comments.length,
     },
@@ -1691,7 +1841,7 @@ function nextFor(status) {
 }
 
 function statusCommand(repo, config, flags) {
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
   const taskId = flags.task ?? active?.taskId ?? null;
 
@@ -1709,14 +1859,17 @@ function statusCommand(repo, config, flags) {
   }
 
   const hash = configHash(config);
-  const trust = readTrust(paths);
-  const trusted = Boolean(trust && trust.configHash === hash);
+  const trusted = isTrusted(paths, config);
 
   let evidence = null;
   if (task) {
     const value = readJsonSafe(taskFile(paths, task.id, "evidence.json"));
     if (value) {
-      const tree = gitOrNull(["rev-parse", "HEAD^{tree}"], { cwd: repo.root });
+      const evidenceCwd =
+        task.worktree && fileExists(task.worktree) ? task.worktree : null;
+      const tree = evidenceCwd
+        ? gitOrNull(["rev-parse", "HEAD^{tree}"], { cwd: evidenceCwd })
+        : null;
       evidence = {
         result: value.result,
         treeHash: value.treeHash,
@@ -1726,7 +1879,8 @@ function statusCommand(repo, config, flags) {
             value.dirty === false &&
             tree &&
             value.treeHash === `git:${tree}` &&
-            value.configHash === hash,
+            value.configHash === hash &&
+            value.branch === task.branch,
         ),
       };
     }
@@ -1766,7 +1920,7 @@ function statusCommand(repo, config, flags) {
   return {
     data: {
       repo: {
-        root: repo.root,
+        root: repo.mainRoot,
         baseBranch: repo.baseBranch,
         remote: repo.remote,
       },
@@ -1827,8 +1981,48 @@ export async function run(argv, io = {}) {
   const meta = { repoRoot: null, taskId: flags.task ?? null };
 
   try {
+    if (!COMMANDS.has(command)) {
+      throw new CodedError(
+        ERROR_CODES.USAGE,
+        `unknown command "${command}"`,
+        null,
+        "Run `codeflow --help`.",
+      );
+    }
     const repo = findRepo(cwd);
-    meta.repoRoot = repo.root;
+    meta.repoRoot = repo.mainRoot;
+    assertStateNotTracked(repo);
+
+    let projectConfig = null;
+    let configError = null;
+    let task = null;
+    if (command !== "init") {
+      try {
+        projectConfig = loadConfig(repo.mainRoot);
+        repo.projectConfig = projectConfig;
+      } catch (error) {
+        configError = error;
+      }
+      if (projectConfig) {
+        assertStateNotTracked(repo, projectConfig.stateDir);
+      }
+      if (!projectConfig && command !== "doctor") {
+        throw configError;
+      }
+      if (projectConfig) {
+        const paths = statePaths(repo.mainRoot, projectConfig);
+        const active = readActive(paths);
+        const taskId = flags.task ?? active?.taskId ?? null;
+        meta.taskId = taskId;
+        if (taskId) {
+          task = readTask(paths, taskId);
+        }
+      }
+    }
+
+    const config = projectConfig
+      ? configForCommand(repo, command, task, projectConfig)
+      : null;
 
     let result;
     switch (command) {
@@ -1837,79 +2031,59 @@ export async function run(argv, io = {}) {
         break;
       }
       case "new": {
-        const config = loadConfig(repo.root);
         result = newCommand(repo, config, flags, positional);
         break;
       }
       case "approve": {
-        const config = loadConfig(repo.root);
         result = approveCommand(repo, config, flags, positional);
         break;
       }
       case "plan": {
-        const config = loadConfig(repo.root);
         result = planCommand(repo, config, flags);
         break;
       }
       case "trust": {
-        const config = loadConfig(repo.root);
         result = trustCommand(repo, config, flags);
         break;
       }
       case "verify": {
-        const config = loadConfig(repo.root);
         result = verifyCommand(repo, config, flags);
         break;
       }
       case "start": {
-        const config = loadConfig(repo.root);
         result = startCommand(repo, config, flags);
         break;
       }
       case "resume": {
-        const config = loadConfig(repo.root);
         result = resumeCommand(repo, config, flags);
         break;
       }
       case "finish": {
-        const config = loadConfig(repo.root);
         result = finishCommand(repo, config, flags, env);
         break;
       }
       case "self-review": {
-        const config = loadConfig(repo.root);
         result = selfReviewCommand(repo, config, flags);
         break;
       }
       case "pr": {
-        const config = loadConfig(repo.root);
         result = await prCommand(repo, config, flags, env);
         break;
       }
       case "watch": {
-        const config = loadConfig(repo.root);
         result = await watchCommand(repo, config, flags, env);
         break;
       }
       case "comments": {
-        const config = loadConfig(repo.root);
         result = commentsCommand(repo, config, flags, env);
         break;
       }
       case "status": {
-        const config = loadConfig(repo.root);
         result = statusCommand(repo, config, flags);
         break;
       }
       case "doctor": {
-        let config = null;
-        let configError = null;
-        try {
-          config = loadConfig(repo.root);
-        } catch (error) {
-          configError = error;
-        }
-        result = doctorCommand(repo, config, configError);
+        result = doctorCommand(repo, projectConfig, configError);
         break;
       }
       default:
@@ -1925,7 +2099,7 @@ export async function run(argv, io = {}) {
       command,
       result.data,
       {
-        repoRoot: repo.root,
+        repoRoot: repo.mainRoot,
         taskId: result.taskId ?? flags.task ?? null,
       },
       result.warnings ?? [],

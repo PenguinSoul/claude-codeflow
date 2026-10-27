@@ -70,7 +70,7 @@ test("every command has a description, a codeflow tool grant, and a CLI call", (
   }
 });
 
-test("the skill carries the L1 boundary and red lines", () => {
+test("the skill carries the human boundary and red lines", () => {
   const skill = readFileSync(join(root, "skills/codeflow/SKILL.md"), "utf8");
   const fm = frontmatter(skill);
   assert.match(fm, /^name: codeflow$/m);
@@ -115,4 +115,28 @@ test("the CLI executable is runnable", () => {
   });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^codeflow 0\.1\.0/);
+});
+
+test("user-facing docs do not use internal workflow labels", () => {
+  const files = [
+    "README.md",
+    "README.zh-CN.md",
+    "package.json",
+    ".claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "skills/codeflow/SKILL.md",
+    ...readdirSync(join(root, "commands")).map((name) => `commands/${name}`),
+    ...readdirSync(join(root, "docs"))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => `docs/${name}`),
+  ];
+
+  for (const file of files) {
+    const text = readFileSync(join(root, file), "utf8");
+    assert.doesNotMatch(
+      text,
+      /\bL[123]\b/,
+      `${file} must not use internal workflow labels`,
+    );
+  }
 });

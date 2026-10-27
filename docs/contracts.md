@@ -43,7 +43,7 @@ Rules:
 - Hashes are `sha256:<64 hex chars>`.
 - Absolute paths (`repoRoot`, `worktree`) use native separators.
 - Repository-relative paths (`taskPath`, `bodyPath`, `logPath`) use POSIX `/` and are
-  relative to the repository root.
+  relative to the project root (the primary worktree), not the current task worktree.
 
 ## Exit codes
 
@@ -55,9 +55,21 @@ Rules:
 | `3` | State conflict, stale approval, or lock |
 | `4` | Git conflict or dirty-tree refusal |
 | `5` | GitHub/`gh` missing, unauthenticated, or PR conflict |
-| `6` | Trust missing or stale |
+| `6` | Trust missing, stale, or state tracked by git |
 | `7` | Task blocked; human action required |
 | `8` | Unexpected internal failure |
+
+### Selected error codes
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `E_STATE_TRACKED` | `6` | `.codeflow/state` is tracked by git and cannot be trusted |
+| `E_WORKTREE_MISSING` | `3` | The task worktree is required but missing |
+| `E_WORKTREE_MISMATCH` | `3` | The worktree is not on `task.branch` |
+| `E_TRUST_REQUIRED` | `6` | No approval exists for the current config hash |
+| `E_TRUST_STALE` | `6` | The config hash has no matching approval |
+| `E_APPROVAL_STALE` | `3` | An approved artifact or the self-review packet changed |
+| `E_PUSH_FAILED` | `4` | Push failed or the PR head does not match the verified HEAD |
 
 ## Error object
 
@@ -85,12 +97,18 @@ Rules:
 | `Hash` | `sha256:<64 hex>` |
 | `GitTreeHash` | `git:<40 hex>` for SHA-1 or `sha256:<64 hex>` for SHA-256 |
 | `IsoTime` | ISO 8601 UTC |
-| `RepoPath` | repository-relative POSIX path |
+| `RepoPath` | POSIX path relative to the project root |
 | `AbsPath` | absolute native path |
 
 ## Config
 
 `.codeflow/config.json`, committed.
+
+`stateDir` is resolved from the project root (the primary worktree), never from the
+current task worktree. Commands that inspect the task (`verify`, `pr`, `self-review`,
+`status`, `watch`, `comments`) load the config from the task worktree, so a config
+change on the task branch is the config under test. `pr.template` must be
+repository-relative and stay inside the task worktree.
 
 ```json
 {
@@ -141,7 +159,7 @@ Rules:
 
 ## Trust
 
-`.codeflow/state/trust.json`, local, never committed.
+`.codeflow/state/trust.json` lives in the project root, is local, and is never committed.
 
 ```json
 {
@@ -151,12 +169,29 @@ Rules:
   "approvedAt": "2026-10-26T10:00:00Z",
   "commands": [
     { "name": "lint", "command": "npm run lint", "cwd": "." }
+  ],
+  "approvals": [
+    {
+      "configHash": "sha256:...",
+      "approvedBy": "Name <email>",
+      "approvedAt": "2026-10-26T10:00:00Z",
+      "commands": [
+        { "name": "lint", "command": "npm run lint", "cwd": "." }
+      ]
+    }
   ]
 }
 ```
 
 `configHash` is computed over the normalized config with stable key ordering and no
-whitespace variance. A command change, cwd change, or gate addition invalidates trust.
+whitespace variance. A command change, cwd change, or gate addition invalidates that
+approval. `approvals` keeps one entry per reviewed hash, so the project config and a
+task-branch config can both be approved without erasing each other; the top-level fields
+mirror the most recent approval for compatibility.
+
+If any file under `.codeflow/state` is tracked by git, every command refuses with
+`E_STATE_TRACKED`. A cloned repository must not be able to supply trust, task, evidence,
+or review state.
 
 ## Task
 
@@ -426,19 +461,25 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
     "fresh": true,
     "result": "pass",
     "treeHash": "git:...",
+    "branch": "codeflow/2026-10-26-fix-login",
     "finishedAt": "2026-10-26T10:02:00Z"
   },
   "pr": {
     "mode": "gh",
     "number": 42,
     "state": "open",
-    "checks": { "state": "pending", "total": 5, "passed": 3, "failed": 0, "pending": 2 }
+    "checks": { "state": "pending", "total": 5, "passed": 3, "failed": 0, "pending": 2 },
+    "mergeStateStatus": "BLOCKED",
+    "reviewDecision": "REVIEW_REQUIRED"
   },
   "blocked": null
 }
 ```
 
-`next` is an array of suggested commands, never an automatic action.
+`next` is an array of suggested commands, never an automatic action. `evidence.fresh`
+is true only when the task worktree exists, is on `task.branch`, the tree and config
+hash match, and the recorded tree was clean. No checks are reported as `none`, never
+as success.
 
 ## Command data
 
@@ -542,8 +583,10 @@ Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
   "number": 42,
   "url": "https://github.com/org/repo/pull/42",
   "bodyPath": ".codeflow/state/tasks/2026-10-26-fix-login/PR_BODY.md",
-  "headSha": "abc1234",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
   "checks": { "state": "pending", "total": 5, "passed": 3, "failed": 0, "pending": 2 },
+  "mergeStateStatus": "BLOCKED",
+  "reviewDecision": "REVIEW_REQUIRED",
   "rebased": false,
   "baseCommit": "def5678"
 }
@@ -555,6 +598,23 @@ leaves the worktree clean. If the rebase changes the tree, the existing evidence
 is stale: `pr` refuses with `E_APPROVAL_STALE` (`details.rebased: true`) until
 `verify`, `self-review`, and `approve self-review` are run again. A rewritten
 branch is pushed with `--force-with-lease`.
+
+The task worktree is required and must be on `task.branch`. The `headSha` reported by
+`gh` must equal the verified local HEAD; a mismatch is `E_PUSH_FAILED`.
+
+With `--no-push`, the command is render-only:
+
+```json
+{
+  "mode": "gh",
+  "title": "Fix login redirect",
+  "bodyPath": ".codeflow/state/tasks/2026-10-26-fix-login/PR_BODY.md",
+  "rendered": true,
+  "pushed": false
+}
+```
+
+It writes `PR_BODY.md`, never pushes, never creates a PR, and leaves the task unchanged.
 
 In `compare` mode, `number`, `url`, and `checks` are `null`, and `compareUrl` is the
 pull-request compare link.
@@ -578,18 +638,30 @@ pull-request compare link.
 }
 ```
 
+`approve self-review` stores a hash of the approved review packet in
+`task.json.approvals.selfReview`. `pr` requires that hash to match the current
+`review.json` in addition to the diff and evidence hashes. Editing notes, scope drift,
+or closest-look fields after sign-off invalidates the approval.
+
 ### `watch`
 
 ```json
 {
   "state": "pending",
   "checks": { "total": 5, "passed": 3, "failed": 0, "pending": 2 },
+  "mergeStateStatus": "BLOCKED",
+  "reviewDecision": "REVIEW_REQUIRED",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
   "lastReadAt": "2026-10-26T10:25:00Z",
   "waited": false,
   "polls": 0,
   "timedOut": false
 }
 ```
+
+`state` is `none`, `pending`, `success`, `failure`, or `skipped`. `none` means the
+repository reported no checks; it is never success. Unknown conclusions are pending.
+`mergeStateStatus` and `reviewDecision` are advisory snapshots; only a human merges.
 
 `watch --wait` polls only while checks are pending. `--timeout <seconds>` (default
 300) and `--interval <ms>` (default 5000) bound the wait; a timeout returns
@@ -621,7 +693,9 @@ pull-request compare link.
 `mergeConfirmedBy` is `gh`, `status`, or `confirm`. When `gh` is available and a
 GitHub PR is recorded, `finish` trusts the live PR state: an open PR is refused even
 with `--confirm` or `--force`. `--confirm` only substitutes for merge detection when
-it is unavailable (no `gh`, no GitHub PR, or a compare-mode fallback).
+it is unavailable (no `gh`, no GitHub PR, or a compare-mode fallback). If `gh` is
+installed and a PR is recorded but the state cannot be read (auth or network), `finish`
+fails with `E_GH_AUTH`; it does not treat that failure as permission to confirm.
 
 ### `resume`
 

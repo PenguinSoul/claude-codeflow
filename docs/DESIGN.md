@@ -18,7 +18,7 @@ This is the readable integration of the design. The authoritative details live i
 
 ## Summary
 
-codeflow is a Claude Code plugin that turns a git repository into an **L1 workflow**:
+codeflow is a Claude Code plugin that turns a git repository into an **human-gated delivery workflow**:
 humans decide, and a deterministic CLI executes the mechanics from task-spec to pull
 request, recording evidence at every gate.
 
@@ -29,7 +29,7 @@ request, recording evidence at every gate.
 The CLI is the only state owner. The plugin is a thin shell: commands call the CLI,
 the skill carries the policy, and one session hook shows the active task.
 
-## The L1 contract
+## The workflow contract
 
 | Automated | Human-only |
 | --- | --- |
@@ -43,38 +43,48 @@ the skill carries the policy, and one session hook shows the active task.
 | Review-comment collection (read-only) | — |
 | Cleanup | — |
 
-There is no merge command. The skill forbids `gh pr merge`. L2 (agent fixes review
-comments) and L3 (autonomous merge) are out of scope.
+There is no merge command. The skill forbids `gh pr merge`. Review-response
+automation (the agent fixes review comments) and autonomous merge are out of scope.
 
 ## A day in the life
 
 1. **Onboard.** `/codeflow:init` detects the base branch and candidate gates, writes
-   `.codeflow/config.json`, and prints the commands. Nothing runs.
-2. **Trust.** `/codeflow:trust` shows every command and its cwd; the human approves.
-   Trust is bound to the config hash.
+   `.codeflow/config.json`, and prints the commands. Nothing runs. Commit the config
+   before starting a task.
+2. **Trust.** `/codeflow:trust` shows every command and its cwd; the human approves the
+   exact config hash. State and trust live in the project root; tracked state is
+   refused. Approvals are kept per config hash, so a task-branch config can be reviewed
+   separately.
 3. **Start a task.** `/codeflow:new "fix the login redirect"` creates a task and a
    lightweight `TASK.md`. Claude interviews the human, fills Request / Product / Design /
    Deferrals, and runs `/codeflow:approve design`.
 4. **Plan.** `/codeflow:plan` writes commit-sized steps with a verification line and a
-   Conventional Commit subject. The human approves the plan.
+   Conventional Commit subject. The human approves the plan; progress is recorded
+   separately.
 5. **Implement.** `/codeflow:start` creates `codeflow/<id>` and a worktree under
    `~/.local/state/codeflow/worktrees/<repo>/<id>`. Claude implements step by step.
-6. **Verify.** `/codeflow:verify` runs the fast gates for the task kind, captures
-   evidence, and scans the diff for test weakening, suppressions, config changes, scope
-   drift, and large diffs. `--full` adds full gates; `--live` needs explicit permission.
+   Commands work from the project root or the task worktree.
+6. **Verify.** `/codeflow:verify` loads the config from the task worktree, checks trust
+   for that exact hash, runs the gates, captures branch-bound evidence, and scans the
+   diff for test weakening, suppressions, config changes, scope drift, and large diffs.
+   `--full` adds full gates; `--live` needs explicit permission.
 7. **Self-review.** `/codeflow:self-review` shows the packet: diff stat, plan status,
    evidence, attention items, scope drift, closest-look areas.
-   `/codeflow:approve self-review` records the human sign-off.
-8. **Ship.** `/codeflow:pr` requires fresh evidence, a clean tree, and a self-review.
-   It rebases onto the base (a conflict blocks the task), force-pushes with lease after a
-   rewrite, renders the repository's PR template, and creates the PR with `gh` — or prints
-   a compare URL and body path when `gh` is unavailable. If the rebase changes the tree,
-   evidence must be refreshed.
+   `/codeflow:approve self-review` records the human sign-off and its hash.
+8. **Ship.** `/codeflow:pr` requires fresh evidence, a clean tree, a task worktree on
+   `task.branch`, and an approved self-review. It rebases onto the base (a conflict
+   blocks the task), force-pushes with lease after a rewrite, renders the repository's PR
+   template, and creates the PR with `gh` — or prints a compare URL and body path when
+   `gh` is unavailable. The PR head must match the verified HEAD. If the rebase changes
+   the tree, evidence must be refreshed. `--no-push` renders the body only.
 9. **Watch.** `/codeflow:watch` reads CI once (snapshot) or with `--wait` and a bounded
-   timeout; it never merges. `/codeflow:comments` collects review threads read-only.
+   timeout; it also reports the merge state and review decision. A repository with no
+   checks reports `none`, never success. `/codeflow:comments` collects review threads
+   read-only.
 10. **Finish.** After the human merges, `/codeflow:finish` verifies the PR state with
-    `gh` when available, removes the worktree, and marks the task done. `--force` only
-    bypasses a dirty worktree; it never bypasses the merge check.
+    `gh` when available, removes the worktree, and marks the task done. An open PR is
+    refused even with `--confirm` or `--force`; a `gh` failure is blocked, not treated as
+    absent merge detection. `--force` only bypasses a dirty worktree.
 
 ## Command surface
 
@@ -136,6 +146,10 @@ Worktrees:
 ~/.local/state/codeflow/worktrees/<repo-slug>/<task-id>/
 ```
 
+`.codeflow/state/` is resolved from the project root (the primary worktree) even when
+the command runs inside a task worktree. It must never be tracked; a tracked state file
+is refused. The task worktree owns the config, diff, gates, and evidence under test.
+
 `active.json` is a convenience pointer. Any command accepts `--task <id>`, so multiple
 tasks can run in parallel.
 
@@ -184,7 +198,7 @@ codeflow/
   bin/codeflow                 # on the Bash tool PATH
   src/*.mjs                    # zero-dependency Node ESM
   commands/*.md                # thin wrappers over the CLI
-  skills/codeflow/SKILL.md     # L1 policy, gates, red lines
+  skills/codeflow/SKILL.md     # workflow policy, gates, red lines
   hooks/hooks.json             # SessionStart → codeflow status --brief
   test/*.test.mjs              # node:test
   docs/                        # this design
@@ -244,21 +258,21 @@ This is the plan skeleton; the detailed plan comes after this design is approved
 
 | Alternative | Why rejected |
 | --- | --- |
-| MCP server first | Adds transport and lifecycle work without changing L1 behavior |
+| MCP server first | Adds transport and lifecycle work without changing workflow behavior |
 | TypeScript + build step | Install friction; zero-dep Node is enough |
 | Pure skills/commands | No durable state, no deterministic evidence |
-| Auto-merge | Violates the L1 boundary |
+| Auto-merge | Violates the human boundary |
 | Single active task per repo | Throws away worktree parallelism |
 | Commit-hash evidence | Rebases invalidate valid evidence |
 | Parsing human output in commands | Fragile seam; JSON contract is cheaper |
 | Trusting committed gate commands | Cloned repository = arbitrary code execution |
 | Storing tokens | Adds a secret-management surface; `gh` already owns auth |
-| Auto-fixing review comments | That is L2, not L1 |
+| Auto-fixing review comments | That is review-response automation, not the delivery workflow |
 
 ## Deferred
 
 MCP adapter, screenshot automation, issue-tracker sync, multi-repo orchestration,
-L2 review-comment fixes, web UI, task GC, agent-compliance evals, Windows-native
+review-response automation, web UI, task GC, agent-compliance evals, Windows-native
 polish.
 
 ## Review checklist
@@ -266,7 +280,7 @@ polish.
 Before implementation starts, confirm:
 
 - [ ] The goal and non-goals are right.
-- [ ] The L1 boundary is exactly where you want it.
+- [ ] The human boundary is exactly where you want it.
 - [ ] The trust model is acceptable.
 - [ ] The evidence freshness rule is correct.
 - [ ] The command surface is complete enough for the first build.

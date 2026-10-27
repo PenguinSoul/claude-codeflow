@@ -5,7 +5,9 @@ allowed-tools: Bash(codeflow:*), Read
 
 Run `codeflow start --json`.
 
-It creates the task branch and an isolated worktree. Do not edit the base
-branch, and work inside the printed worktree from now on.
+It requires `.codeflow/config.json` committed on the base branch, creates the task
+branch and an isolated worktree, and checks that the worktree is on the task branch.
+Do not edit the base branch; work inside the printed worktree. codeflow commands work
+from the project root or the task worktree.
 
 Next: implement the plan, then `/codeflow:verify`.

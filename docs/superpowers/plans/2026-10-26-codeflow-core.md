@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a working Claude Code plugin and zero-dependency Node CLI that executes the L1 workflow from task-spec to PR with recorded evidence and human gates.
+**Goal:** Build a working Claude Code plugin and zero-dependency Node CLI that executes the human-gated delivery workflow from task-spec to PR with recorded evidence and human gates.
 
-**Architecture:** A deterministic ESM CLI (`bin/codeflow`) owns state, worktrees, gates, evidence, and delivery. Claude Code commands are thin wrappers over `codeflow <verb> --json`; a skill carries the L1 policy; one `SessionStart` hook injects the active task. JSON contracts are the only wire between the CLI and the shell.
+**Architecture:** A deterministic ESM CLI (`bin/codeflow`) owns state, worktrees, gates, evidence, and delivery. Claude Code commands are thin wrappers over `codeflow <verb> --json`; a skill carries the workflow policy; one `SessionStart` hook injects the active task. JSON contracts are the only wire between the CLI and the shell.
 
 **Tech Stack:** Node >= 20, ESM, `node:test`, git, `gh` (optional), Claude Code plugin manifest.
 
@@ -372,7 +372,7 @@ git commit -m "feat(cli): add the codeflow skeleton with init, status, and docto
 - [ ] **Step 2: Write the safety suite:** dirty tree, stale approval, untrusted config, lock contention, rebase conflict, timeout, schema mismatch, path traversal.
 - [ ] **Step 3: Implement the syntax check script and run every test.**
 - [ ] **Step 4: Run `npm test` and `claude plugin validate .`.**
-- [ ] **Step 5: Commit:** `test: prove the L1 flow in a temporary repository`
+- [ ] **Step 5: Commit:** `test: prove the delivery flow in a temporary repository`
 
 ---
 

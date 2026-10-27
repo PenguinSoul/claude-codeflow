@@ -6,9 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-> Claude Code 的 L1 工作流：人做决定，CLI 执行，每个 Pull Request 都带着可复核的证据。
+> Claude Code 的人审交付流程：人做决定，CLI 执行，每个 Pull Request 都带着可复核的证据。
 
-codeflow 把一个 git 仓库变成可重复的 **L1 工作流**。它在 Claude Code 外面套了一层薄而确定的执行层：task-spec、计划、隔离工作树、门禁、证据、自审和 Pull Request。Claude 负责判断、文字和代码；人保留信任、设计批准、计划批准、自审和合并。
+codeflow 把一个 git 仓库变成可重复的 **人审交付流程**。它在 Claude Code 外面套了一层薄而确定的执行层：task-spec、计划、隔离工作树、门禁、证据、自审和 Pull Request。Claude 负责判断、文字和代码；人保留信任、设计批准、计划批准、自审和合并。
 
 **状态：** 早期、可用、刻意收窄。它不合并 PR，不自动批准 review，也不替代 CI。
 
@@ -33,7 +33,7 @@ codeflow 把机械部分做成确定、可复核的：
 - **小任务、小 PR、一个问题。**
 - **失败即停。** 歧义、冲突和不安全状态会停下来交给人。
 
-## L1 边界
+## 人审边界
 
 | 自动执行 | 仅由人完成 |
 | --- | --- |
@@ -47,7 +47,7 @@ codeflow 把机械部分做成确定、可复核的：
 | 只读收集 review 评论 | — |
 | 状态、恢复和清理 | — |
 
-codeflow 永远不会执行 `gh pr merge`，skill 里也明确禁止。L2（agent 按 review 评论改代码）和 L3（自主合并）不在范围内。
+codeflow 永远不会执行 `gh pr merge`，skill 里也明确禁止。评审响应自动化（agent 按 review 评论改代码）和自主合并不在范围内。
 
 ## 工作方式
 
@@ -152,6 +152,8 @@ claude --plugin-dir .
 ```bash
 # 1. 探测仓库，写入 .codeflow/config.json
 codeflow init
+# 在 start 之前提交 config
+git add .codeflow/config.json && git commit -m "chore: add codeflow config"
 
 # 2. 逐条 review 门禁命令，然后批准
 codeflow trust
@@ -170,7 +172,8 @@ codeflow approve plan
 
 # 5. 在隔离的工作树里实现
 codeflow start
-# 在打印出的 worktree 里写代码
+# 在打印出的 worktree 里写代码；codeflow 命令可以从项目根目录
+# 或 task worktree 运行
 
 # 6. 验证、自审、交付
 codeflow verify
@@ -198,7 +201,7 @@ codeflow finish --confirm
 | `start` | 创建任务分支和工作树 | `--dry-run` |
 | `verify` | 跑门禁并记录基于树的证据 | `--full`、`--live --allow-live`、`--retry` |
 | `self-review` | 生成自审包 | `--scope-drift`、`--closest-look` |
-| `pr` | 渲染 PR 描述、rebase 到 base 并创建/更新 PR | `--no-push`、`--dry-run` |
+| `pr` | 渲染 PR 描述、rebase 到 base 并创建/更新 PR；`--no-push` 只渲染 | `--no-push`、`--dry-run` |
 | `watch` | 只读查看 PR checks | `--wait`、`--timeout <s>`、`--interval <ms>` |
 | `comments` | 只读收集 review 评论，不改代码 | — |
 | `status` | 查看当前任务和下一步 | `--brief`、`--task` |
@@ -257,11 +260,12 @@ codeflow finish --confirm
 
 ## 安全模型
 
-- **信任必须显式。** `init` 从不执行门禁。`trust` 展示每条命令，并把批准绑定到规范化后的 config hash。配置一变，信任和证据都失效。
-- **证据基于树。** rebase 可能改变 commit ID；只有 tree hash、config hash、gate set 全部匹配，并且工作区干净时，证据才可复用。
-- **没有证据不能开 PR。** `pr` 需要通过且未过期的证据、干净的工作区、新鲜的设计/计划批准，以及已批准的自审。rebase 之后可以在 `verified` 状态重跑 `verify` 刷新证据。
+- **信任必须显式。** `init` 从不执行门禁。`trust` 展示每条命令，并把批准绑定到精确的 config hash。state 和 trust 在项目根目录；被 git 跟踪的 `.codeflow/state` 会被拒绝。task 分支改 config 需要单独批准，配置一变证据就失效。
+- **证据基于树。** rebase 可能改变 commit ID；只有 tree hash、config hash、gate set 和分支全部匹配，并且工作区干净时，证据才可复用。验证不会回退到主 checkout。
+- **没有证据不能开 PR。** `pr` 需要位于 `task.branch` 的 task worktree、通过且未过期的证据、干净的工作区、新鲜的设计/计划批准、hash 匹配的已批准自审，以及等于已验证 HEAD 的 PR head。`--no-push` 只渲染 body。rebase 之后可以在 `verified` 状态重跑 `verify` 刷新证据。
 - **没有合并。** 不存在 merge 命令；skill 明确禁止 `gh pr merge`。
-- **不能强推未合并的 PR。** `finish --force` 只绕过脏工作树；`gh` 显示 PR 还开着时，`--confirm` 或 `--force` 都会被拒绝。
+- **没有假绿。** 没有 checks 的仓库报告 `none`，绝不报告 success。
+- **不能强推未合并的 PR。** `finish --force` 只绕过脏工作树；`gh` 显示 PR 还开着时，`--confirm` 或 `--force` 都会被拒绝；`gh` 认证或网络失败会阻塞，不会当成“无法检测合并”。
 - **不许弱化门禁。** skill 禁止为了让门禁通过而改测试、加 skip，或加 `@ts-ignore`、`@ts-expect-error`、`eslint-disable`、`biome-ignore`、`as any`。
 - **不存 token。** GitHub 认证归 `gh` 管，codeflow 不保存任何凭证。
 - **日志只在本机。** 门禁日志可能包含项目工具打印出的敏感信息，永远不会被上传。
@@ -272,7 +276,7 @@ codeflow finish --confirm
 bin/codeflow              可执行入口
 src/                      确定性的 CLI 模块
 commands/                 Claude Code slash commands
-skills/codeflow/          L1 策略和红线
+skills/codeflow/          流程策略和红线
 hooks/                    SessionStart 状态注入
 test/                     node:test 测试、fake gate、fake gh
 docs/                     目标、架构、契约、设计
@@ -281,7 +285,7 @@ docs/                     目标、架构、契约、设计
 
 ## 设计文档
 
-- [`docs/goal-and-requirements.md`](docs/goal-and-requirements.md) — 产品目标、L1 边界、非目标、成功指标。
+- [`docs/goal-and-requirements.md`](docs/goal-and-requirements.md) — 产品目标、人审边界、非目标、成功指标。
 - [`docs/architecture.md`](docs/architecture.md) — 拓扑、编号决策、不变量、信任、证据、安全。
 - [`docs/contracts.md`](docs/contracts.md) — JSON wire 和所有产物 schema。
 - [`docs/DESIGN.md`](docs/DESIGN.md) — 整合后的设计与实现顺序。
@@ -289,7 +293,7 @@ docs/                     目标、架构、契约、设计
 ## 开发
 
 ```bash
-npm test                  # 86 个测试：临时仓库、fake gate、fake gh
+npm test                  # 100 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```

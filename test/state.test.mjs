@@ -13,6 +13,7 @@ import {
   writeActive,
   writeTask,
 } from "../src/state.mjs";
+import { writeJsonAtomic } from "../src/util.mjs";
 import { cleanup, tempRepo } from "./helpers.mjs";
 
 test("statePaths and active pointer round-trip", (t) => {
@@ -67,5 +68,27 @@ test("statePaths rejects a stateDir that escapes the repository", (t) => {
   assert.throws(
     () => statePaths(dir, config),
     (error) => error.code === "E_CONFIG",
+  );
+});
+
+test("task ids that escape the state directory are rejected", (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const config = defaultConfig(findRepo(dir));
+  const paths = statePaths(dir, config);
+  ensureState(paths);
+
+  assert.throws(
+    () => readTask(paths, "../escape"),
+    (error) => error.code === "E_USAGE",
+  );
+
+  writeJsonAtomic(paths.activePath, {
+    schemaVersion: 1,
+    taskId: "../escape",
+  });
+  assert.throws(
+    () => readActive(paths),
+    (error) => error.code === "E_STATE_CONFLICT",
   );
 });

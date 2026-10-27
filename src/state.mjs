@@ -19,6 +19,20 @@ import {
   writeJsonAtomic,
 } from "./util.mjs";
 
+export const TASK_ID_PATTERN = /^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function assertTaskId(id) {
+  if (!TASK_ID_PATTERN.test(String(id ?? ""))) {
+    throw new CodedError(
+      ERROR_CODES.USAGE,
+      `invalid task id "${id}"`,
+      { taskId: id },
+      "Use a task id from `codeflow status --json`.",
+    );
+  }
+  return id;
+}
+
 export function statePaths(root, config) {
   const stateDir = path.resolve(root, config.stateDir || ".codeflow/state");
   if (!isContained(root, stateDir)) {
@@ -48,6 +62,14 @@ export function readActive(paths) {
   if (!value || typeof value.taskId !== "string") {
     return null;
   }
+  if (!TASK_ID_PATTERN.test(value.taskId)) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "active.json contains an invalid task id",
+      { taskId: value.taskId },
+      "Run `codeflow new` or clear the corrupt active pointer.",
+    );
+  }
   return value;
 }
 
@@ -61,6 +83,7 @@ export function writeActive(paths, taskId) {
 }
 
 export function taskDir(paths, id) {
+  assertTaskId(id);
   return path.join(paths.tasksDir, id);
 }
 
@@ -82,7 +105,9 @@ export function listTasks(paths) {
     return [];
   }
   return readdirSync(paths.tasksDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter(
+      (entry) => entry.isDirectory() && TASK_ID_PATTERN.test(entry.name),
+    )
     .map((entry) => readTask(paths, entry.name))
     .filter(Boolean);
 }

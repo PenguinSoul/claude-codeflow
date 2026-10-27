@@ -21,6 +21,17 @@ export function findRepo(cwd) {
   const gitDir = absolute(cwd, git(["rev-parse", "--git-dir"], { cwd }));
   const commonDir = absolute(cwd, git(["rev-parse", "--git-common-dir"], { cwd }));
 
+  let mainRoot = root;
+  const worktrees = gitOrNull(["worktree", "list", "--porcelain"], { cwd });
+  if (worktrees) {
+    const first = worktrees
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("worktree "));
+    if (first) {
+      mainRoot = first.slice("worktree ".length);
+    }
+  }
+
   const remotes = git(["remote"], { cwd })
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -53,12 +64,30 @@ export function findRepo(cwd) {
 
   return {
     root,
+    mainRoot,
     gitDir,
     commonDir,
     excludePath: path.join(commonDir, "info", "exclude"),
     baseBranch: baseBranch ?? "main",
     remote,
   };
+}
+
+export function trackedState(repo, stateDir = ".codeflow/state") {
+  const value = gitOrNull(["ls-files", "--", stateDir], { cwd: repo.mainRoot });
+  return value ? value.split(/\r?\n/).filter(Boolean) : [];
+}
+
+export function assertStateNotTracked(repo, stateDir = ".codeflow/state") {
+  const files = trackedState(repo, stateDir);
+  if (files.length > 0) {
+    throw new CodedError(
+      ERROR_CODES.STATE_TRACKED,
+      "codeflow state is tracked by git and cannot be trusted",
+      { files },
+      "Remove the tracked state files, keep `.codeflow/state/` out of commits, then retry.",
+    );
+  }
 }
 
 export function ensureExcluded(repo, pattern = ".codeflow/state/") {

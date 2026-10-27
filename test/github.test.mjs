@@ -58,6 +58,18 @@ test("normalizeChecks counts success, failure, pending, and skipped", () => {
   });
 });
 
+test("normalizeChecks reports no checks and unknown conclusions honestly", () => {
+  assert.equal(normalizeChecks([]).state, "none");
+  assert.equal(
+    normalizeChecks([{ status: "COMPLETED", conclusion: null }]).state,
+    "pending",
+  );
+  assert.equal(
+    normalizeChecks([{ conclusion: "SKIPPED" }]).state,
+    "skipped",
+  );
+});
+
 test("findOpenPr, createOrUpdatePr, checks, and comments use gh", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));

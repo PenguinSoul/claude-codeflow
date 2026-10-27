@@ -1,7 +1,8 @@
 import { accessSync, constants, existsSync } from "node:fs";
-import { configHash, validateConfig } from "./config.mjs";
+import { validateConfig } from "./config.mjs";
 import { gitVersion } from "./git.mjs";
 import { statePaths, readTrust } from "./state.mjs";
+import { isTrusted } from "./trust.mjs";
 import { which } from "./util.mjs";
 
 export function runDoctor(repo, config, configError = null) {
@@ -50,7 +51,7 @@ export function runDoctor(repo, config, configError = null) {
     return { checks };
   }
 
-  const paths = statePaths(repo.root, config);
+  const paths = statePaths(repo.mainRoot, config);
   const stateExists = existsSync(paths.stateDir);
   let writable = false;
   try {
@@ -68,14 +69,13 @@ export function runDoctor(repo, config, configError = null) {
   });
 
   const trust = readTrust(paths);
-  const hash = configHash(config);
   if (!trust) {
     checks.push({
       name: "trust",
       ok: false,
       detail: "not trusted; run `codeflow trust`",
     });
-  } else if (trust.configHash !== hash) {
+  } else if (!isTrusted(paths, config)) {
     checks.push({
       name: "trust",
       ok: false,
