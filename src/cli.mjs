@@ -2004,6 +2004,16 @@ function commentsCommand(repo, config, flags, env) {
     "",
     `PR: #${pr.number}`,
     "",
+    "## Review threads",
+    ...(data.resolutionAvailable
+      ? data.threads.length === 0
+        ? ["- None."]
+        : data.threads.map((thread) => {
+            const first = thread.comments[0];
+            return `- [${thread.isResolved ? "resolved" : "open"}] ${first?.author ?? "unknown"} at \`${thread.path ?? "?"}:${thread.line ?? "?"}\`: ${first?.body || "(no body)"}`;
+          })
+      : ["- Resolution state unavailable; showing inline comments only."]),
+    "",
     "## Reviews",
     ...(data.reviews.length === 0
       ? ["- None."]
@@ -2035,11 +2045,14 @@ function commentsCommand(repo, config, flags, env) {
   }
   return {
     data: {
-      threads: data.comments.length,
+      threads: data.resolutionAvailable
+        ? data.threads.length
+        : data.comments.length,
       reviews: data.reviews.length,
       path: repoRelative(repo.mainRoot, taskFile(paths, task.id, "COMMENTS.md")),
-      resolved: 0,
-      unresolved: data.comments.length,
+      resolutionAvailable: data.resolutionAvailable,
+      resolved: data.resolved,
+      unresolved: data.unresolved,
     },
     taskId,
   };

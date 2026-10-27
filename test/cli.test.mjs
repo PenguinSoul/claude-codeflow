@@ -648,6 +648,8 @@ test("self-review, approve, pr, watch, and comments form the delivery flow", asy
   const comments = await invoke(["comments", "--json"], dir, env);
   assert.equal(comments.code, 0);
   assert.equal(comments.json.data.threads, 0);
+  assert.equal(comments.json.data.resolutionAvailable, true);
+  assert.equal(comments.json.data.resolved, 0);
   assert.ok(
     existsSync(join(dir, ".codeflow/state/tasks", planned.taskId, "COMMENTS.md")),
   );

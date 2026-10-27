@@ -130,8 +130,8 @@ Every transition is guarded:
   state. An open PR is refused even with `--confirm` or `--force`; `--confirm`
   only covers the case where merge detection is unavailable.
 - **GitHub optional.** With `gh`, `pr` creates or updates the PR, `watch` reads
-  checks, and `comments` reads review threads. Without `gh`, `pr` pushes the
-  branch and prints a compare URL.
+  checks, and `comments` reads review threads with their resolution state. Without
+  `gh`, `pr` pushes the branch and prints a compare URL.
 - **No hidden runtime.** Zero runtime dependencies, no build step, plain Node
   ESM.
 
@@ -249,7 +249,7 @@ Every command supports `--json`.
 | `self-review` | Build the self-review packet | `--scope-drift`, `--closest-look` |
 | `pr` | Render the PR body, rebase onto the base, and create/update the PR; `--no-push` renders only | `--no-push`, `--dry-run` |
 | `watch` | Read the PR checks | `--wait`, `--timeout <s>`, `--interval <ms>` |
-| `comments` | Collect review comments without changing code | — |
+| `comments` | Collect review comments and resolution state without changing code | — |
 | `status` | Show the active task and next step | `--brief`, `--task` |
 | `resume` | Clear a blocked state | `--task` |
 | `finish` | Verify the merge with `gh` when available, then remove the worktree | `--confirm`, `--delete-branch`, `--force` |
@@ -359,7 +359,7 @@ docs/                     goal, architecture, contracts, design
 ## Development
 
 ```bash
-npm test                  # 110 tests: temporary repos, fake gates, fake gh
+npm test                  # 111 tests: temporary repos, fake gates, fake gh
 npm run check             # node --check on every source file
 claude plugin validate .  # manifest, commands, hooks, marketplace
 ```

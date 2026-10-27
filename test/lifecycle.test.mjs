@@ -509,6 +509,41 @@ test("verify refuses while the task lock is held", async (t) => {
   assert.equal(verified.code, 0, verified.err || verified.out);
 });
 
+test("comments reports resolved and open review threads", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+    threads: [
+      {
+        resolved: true,
+        path: "src/a.ts",
+        line: 1,
+        comments: [{ author: "reviewer", body: "This is handled." }],
+      },
+      {
+        resolved: false,
+        path: "src/b.ts",
+        line: 2,
+        comments: [{ author: "reviewer", body: "Please change this." }],
+      },
+    ],
+  });
+
+  const result = await invoke(["comments", "--json"], dir, delivered.env);
+  assert.equal(result.code, 0, result.err || result.out);
+  assert.equal(result.json.data.resolutionAvailable, true);
+  assert.equal(result.json.data.resolved, 1);
+  assert.equal(result.json.data.unresolved, 1);
+
+  const markdown = readFileSync(
+    join(dir, ".codeflow/state/tasks", delivered.taskId, "COMMENTS.md"),
+    "utf8",
+  );
+  assert.match(markdown, /\[resolved\]/);
+  assert.match(markdown, /\[open\]/);
+});
+
 test("watch --wait polls until checks settle", async (t) => {
   const { dir } = repoWithRemote(t);
   const delivered = await deliver(dir, t, {

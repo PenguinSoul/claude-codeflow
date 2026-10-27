@@ -167,11 +167,78 @@ export function readChecks(cwd, number, env = process.env) {
   return prView(cwd, number, env).checks;
 }
 
+const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 100) {
+            nodes {
+              author { login }
+              body
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
 export function readComments(cwd, number, env = process.env) {
   const repo = gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], {
     cwd,
     env,
   });
+  const [owner, name] = repo.split("/");
+  const threadsRaw = gh(
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${REVIEW_THREADS_QUERY}`,
+      "-f",
+      `owner=${owner}`,
+      "-f",
+      `name=${name}`,
+      "-F",
+      `number=${number}`,
+    ],
+    { cwd, env, allowFail: true },
+  );
+
+  let threads = [];
+  let resolutionAvailable = false;
+  if (threadsRaw) {
+    try {
+      const nodes =
+        JSON.parse(threadsRaw)?.data?.repository?.pullRequest?.reviewThreads
+          ?.nodes;
+      if (Array.isArray(nodes)) {
+        resolutionAvailable = true;
+        threads = nodes.map((thread) => ({
+          id: thread.id ?? null,
+          isResolved: Boolean(thread.isResolved),
+          isOutdated: Boolean(thread.isOutdated),
+          path: thread.path ?? null,
+          line: thread.line ?? null,
+          comments: (thread.comments?.nodes ?? []).map((comment) => ({
+            author: comment.author?.login ?? "unknown",
+            body: comment.body ?? "",
+            createdAt: comment.createdAt ?? null,
+          })),
+        }));
+      }
+    } catch {
+      resolutionAvailable = false;
+    }
+  }
+
   const commentsRaw = gh(
     ["api", `repos/${repo}/pulls/${number}/comments`, "--paginate"],
     { cwd, env },
@@ -195,7 +262,21 @@ export function readComments(cwd, number, env = process.env) {
     state: review.state ?? null,
     submittedAt: review.submitted_at ?? null,
   }));
-  return { repo, comments, reviews };
+  const resolved = resolutionAvailable
+    ? threads.filter((thread) => thread.isResolved).length
+    : null;
+  return {
+    repo,
+    threads,
+    resolutionAvailable,
+    resolved,
+    unresolved:
+      resolutionAvailable && resolved !== null
+        ? threads.length - resolved
+        : null,
+    comments,
+    reviews,
+  };
 }
 
 export function compareUrl(remoteUrl, base, branch) {
