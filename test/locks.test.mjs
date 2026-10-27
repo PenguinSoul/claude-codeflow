@@ -22,42 +22,42 @@ function setup(t) {
   const config = defaultConfig(repo);
   const paths = statePaths(dir, config);
   ensureState(paths);
-  writeTask(paths, { schemaVersion: 1, id: "task", title: "Task" });
+  writeTask(paths, { schemaVersion: 1, id: "2026-10-27-task", title: "Task" });
   return { paths };
 }
 
 test("a task lock is exclusive and releasable", (t) => {
   const { paths } = setup(t);
-  const lock = acquireLock(paths, "task", { command: "verify" });
+  const lock = acquireLock(paths, "2026-10-27-task", { command: "verify" });
 
   assert.equal(lock.pid, process.pid);
-  assert.equal(readLock(paths, "task").command, "verify");
+  assert.equal(readLock(paths, "2026-10-27-task").command, "verify");
   assert.throws(
-    () => acquireLock(paths, "task", { command: "start" }),
+    () => acquireLock(paths, "2026-10-27-task", { command: "start" }),
     (error) => error.code === "E_LOCKED",
   );
 
-  assert.equal(releaseLock(paths, "task"), true);
-  assert.equal(readLock(paths, "task"), null);
-  assert.equal(acquireLock(paths, "task", { command: "start" }).command, "start");
+  assert.equal(releaseLock(paths, "2026-10-27-task"), true);
+  assert.equal(readLock(paths, "2026-10-27-task"), null);
+  assert.equal(acquireLock(paths, "2026-10-27-task", { command: "start" }).command, "start");
 });
 
 test("a dead pid makes a lock stale", (t) => {
   const { paths } = setup(t);
-  writeJsonAtomic(lockPath(paths, "task"), {
+  writeJsonAtomic(lockPath(paths, "2026-10-27-task"), {
     pid: 999999,
     host: hostname(),
     command: "old",
     startedAt: nowIso(),
   });
 
-  const lock = acquireLock(paths, "task", { command: "verify" });
+  const lock = acquireLock(paths, "2026-10-27-task", { command: "verify" });
   assert.equal(lock.command, "verify");
 });
 
 test("force removes a lock held by another live pid", (t) => {
   const { paths } = setup(t);
-  writeJsonAtomic(lockPath(paths, "task"), {
+  writeJsonAtomic(lockPath(paths, "2026-10-27-task"), {
     pid: 1,
     host: hostname(),
     command: "old",
@@ -65,10 +65,10 @@ test("force removes a lock held by another live pid", (t) => {
   });
 
   assert.throws(
-    () => acquireLock(paths, "task", { command: "verify" }),
+    () => acquireLock(paths, "2026-10-27-task", { command: "verify" }),
     (error) => error.code === "E_LOCKED",
   );
-  const lock = acquireLock(paths, "task", {
+  const lock = acquireLock(paths, "2026-10-27-task", {
     command: "verify",
     force: true,
   });

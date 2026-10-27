@@ -71,22 +71,34 @@ export function normalizeChecks(rollup) {
     checks.total += 1;
     const conclusion = String(item.conclusion ?? "").toUpperCase();
     const status = String(item.status ?? "").toUpperCase();
-    if (["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(conclusion)) {
+    if (
+      [
+        "FAILURE",
+        "CANCELLED",
+        "TIMED_OUT",
+        "ACTION_REQUIRED",
+        "STARTUP_FAILURE",
+      ].includes(conclusion)
+    ) {
       checks.failed += 1;
     } else if (["SKIPPED", "NEUTRAL"].includes(conclusion)) {
       checks.skipped += 1;
-    } else if (!conclusion || ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"].includes(status)) {
-      checks.pending += 1;
-    } else {
+    } else if (conclusion === "SUCCESS") {
       checks.passed += 1;
+    } else {
+      checks.pending += 1;
     }
   }
   checks.state =
-    checks.failed > 0
-      ? "failure"
-      : checks.pending > 0
-        ? "pending"
-        : "success";
+    checks.total === 0
+      ? "none"
+      : checks.failed > 0
+        ? "failure"
+        : checks.pending > 0
+          ? "pending"
+          : checks.passed === 0 && checks.skipped > 0
+            ? "skipped"
+            : "success";
   return checks;
 }
 

@@ -11,7 +11,7 @@ tags: [l1, workflow, claude-code, git]
 
 ## Goal
 
-codeflow is a Claude Code plugin that turns a git repository into an **L1 workflow**:
+codeflow is a Claude Code plugin that turns a git repository into an **human-gated delivery workflow**:
 humans make the decisions, and the machine executes the repeatable mechanics from
 task-spec to pull request, with evidence at every gate.
 
@@ -39,7 +39,7 @@ The result is agent work that feels fast but is expensive to trust.
 - Developers using Claude Code on real git repositories.
 - Small teams with spec-first or agent-first workflows.
 - Maintainers who need reviewable evidence rather than agent assertions.
-- People who want L1 automation without handing merge authority to a model.
+- People who want guarded automation without handing merge authority to a model.
 
 ## Principles
 
@@ -89,7 +89,7 @@ The smallest useful build:
 13. **Operate the task.** `status`, `resume`, `finish`, `doctor`, and an append-only
     event log.
 
-## The L1 boundary
+## The human boundary
 
 Automated: task creation, task-spec scaffolding, plan validation, worktree creation,
 gate execution, evidence capture, attention scanning, PR body rendering, push, PR
@@ -105,7 +105,7 @@ Human-only:
 6. **Exceptions** — conflicts, ambiguous requirements, security concerns, and blocked
    states are escalated, never guessed.
 
-L2 (agent fixes review comments) and L3 (autonomous merge) are explicitly out of scope.
+Review-response automation (the agent fixes review comments) and autonomous merge are explicitly out of scope.
 
 ## Non-goals
 
@@ -145,12 +145,16 @@ Measure after real use, not in the abstract:
 | Agent bypasses the CLI and edits state or pushes directly | Skill red lines; status audit; commands are the only supported path for push/PR |
 | Agent weakens tests or adds suppressions to pass a gate | Attention scan; self-review packet; human sign-off; optional strict mode |
 | Stale approval after the task-spec changes | Hash-bound approvals; mismatch blocks `start` and `pr` |
-| Untrusted repository runs arbitrary gate commands | Explicit trust bound to the config hash; dry-run display |
-| Rebase invalidates evidence | Tree-hash freshness: commit IDs may change, tree content may not |
+| Untrusted repository runs arbitrary gate commands | Explicit trust per config hash; tracked state is refused; dry-run display |
+| A cloned repository ships its own trust or evidence | `.codeflow/state` is never tracked; a tracked file is `E_STATE_TRACKED` |
+| Verification uses the wrong tree | Task worktree required and checked against `task.branch`; no base-checkout fallback |
+| Rebase invalidates evidence | Tree-hash freshness: commit IDs may change, tree content may not; branch and config are also checked |
 | Flaky gate | One retry, marked flaky; never loop indefinitely |
-| `gh` missing or unauthenticated | Compare-URL fallback; clear diagnostic; no token storage |
-| Concurrent sessions | Per-task locks with stale detection; atomic writes |
-| State corruption after upgrade | Schema versions and migrations; `doctor` reports mismatches |
+| `gh` missing | Compare-URL fallback; clear diagnostic; no token storage |
+| `gh` installed but unauthenticated | Fail closed with `E_GH_AUTH`; never silently report green |
+| No CI configured | Checks state is `none`, never `success` |
+| Concurrent sessions | Per-task locks on `start`/`resume`/`finish` with stale detection; atomic writes; broader lock coverage is a follow-up |
+| State corruption after upgrade | Schema version is checked; migrations are a follow-up |
 | Secrets in gate logs | Local-only storage; documented warning; never upload |
 
 ## Security and privacy

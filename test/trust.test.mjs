@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { defaultConfig } from "../src/config.mjs";
-import { findRepo } from "../src/repo.mjs";
+import { assertStateNotTracked, findRepo } from "../src/repo.mjs";
 import { ensureState, readTrust, statePaths } from "../src/state.mjs";
 import { assertTrusted, commandsFor, trustConfig } from "../src/trust.mjs";
-import { cleanup, tempRepo } from "./helpers.mjs";
+import { cleanup, git, tempRepo } from "./helpers.mjs";
 
 function setup(t) {
   const dir = tempRepo();
@@ -26,6 +28,39 @@ function setup(t) {
   ensureState(paths);
   return { dir, config, paths };
 }
+
+test("tracked state is refused", (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  mkdirSync(join(dir, ".codeflow", "state"), { recursive: true });
+  writeFileSync(join(dir, ".codeflow", "state", "trust.json"), "{}\n");
+  git(dir, ["add", "-f", ".codeflow/state/trust.json"]);
+  git(dir, ["commit", "-m", "test: commit forged state"]);
+
+  assert.throws(
+    () => assertStateNotTracked(findRepo(dir)),
+    (error) => error.code === "E_STATE_TRACKED",
+  );
+});
+
+test("trust keeps one approval per config hash", (t) => {
+  const { config, paths } = setup(t);
+  trustConfig(paths, config, "First <first@test>");
+  const second = {
+    ...config,
+    gates: [
+      {
+        ...config.gates[0],
+        command: 'node -e "process.exit(1)"',
+      },
+    ],
+  };
+  trustConfig(paths, second, "Second <second@test>");
+
+  assert.equal(assertTrusted(paths, config).approvedBy, "First <first@test>");
+  assert.equal(assertTrusted(paths, second).approvedBy, "Second <second@test>");
+  assert.equal(readTrust(paths).approvals.length, 2);
+});
 
 test("trust is required before assertTrusted succeeds", (t) => {
   const { config, paths } = setup(t);

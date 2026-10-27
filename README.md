@@ -6,10 +6,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-> The L1 workflow for Claude Code: humans decide, the CLI executes, and every
+> The human-gated delivery workflow for Claude Code: humans decide, the CLI executes, and every
 > pull request carries recorded evidence.
 
-codeflow turns a git repository into a repeatable **L1 workflow**. It runs a
+codeflow turns a git repository into a repeatable **human-gated delivery workflow**. It runs a
 thin, deterministic execution layer around Claude Code: task-spec, plan,
 isolated worktree, gates, evidence, self-review, and a pull request. Claude
 supplies judgement, prose, and code. The human keeps trust, design approval,
@@ -43,7 +43,7 @@ codeflow makes the mechanics deterministic and reviewable:
 - **Small tasks, small PRs, one problem.**
 - **Fail closed.** Ambiguity, conflicts, and unsafe states stop and escalate.
 
-## The L1 boundary
+## The human boundary
 
 | Automated | Human-only |
 | --- | --- |
@@ -57,8 +57,8 @@ codeflow makes the mechanics deterministic and reviewable:
 | Review-comment collection (read-only) | — |
 | Status, resume, and cleanup | — |
 
-codeflow never runs `gh pr merge`. The skill forbids it. L2 (the agent fixes
-review comments) and L3 (autonomous merge) are out of scope.
+codeflow never runs `gh pr merge`. The skill forbids it. Review-response
+automation (the agent fixes review comments) and autonomous merge are out of scope.
 
 ## How it works
 
@@ -186,6 +186,8 @@ plugin is enabled, so `codeflow` is available directly. You can also run
 ```bash
 # 1. Detect the repository and write .codeflow/config.json
 codeflow init
+# commit the config before starting a task
+git add .codeflow/config.json && git commit -m "chore: add codeflow config"
 
 # 2. Review every gate command, then approve it
 codeflow trust
@@ -204,7 +206,8 @@ codeflow approve plan
 
 # 5. Work in an isolated worktree
 codeflow start
-# implement inside the printed worktree
+# implement inside the printed worktree; codeflow commands work from
+# the project root or the task worktree
 
 # 6. Verify, review, and ship
 codeflow verify
@@ -232,7 +235,7 @@ Every command supports `--json`.
 | `start` | Create the task branch and worktree | `--dry-run` |
 | `verify` | Run gates and record tree-hash evidence | `--full`, `--live --allow-live`, `--retry` |
 | `self-review` | Build the self-review packet | `--scope-drift`, `--closest-look` |
-| `pr` | Render the PR body, rebase onto the base, and create/update the PR | `--no-push`, `--dry-run` |
+| `pr` | Render the PR body, rebase onto the base, and create/update the PR; `--no-push` renders only | `--no-push`, `--dry-run` |
 | `watch` | Read the PR checks | `--wait`, `--timeout <s>`, `--interval <ms>` |
 | `comments` | Collect review comments without changing code | — |
 | `status` | Show the active task and next step | `--brief`, `--task` |
@@ -293,19 +296,23 @@ for commands that omit `--task`.
 
 ## Safety
 
-- **Trust is explicit.** `init` never runs a gate. `trust` shows every command
-  and binds approval to the normalized config hash. A config change invalidates
-  trust and evidence.
-- **Evidence is tree-based.** A rebase may change the commit ID; evidence is
-  reusable only when the tree hash, config hash, and gate set match, and the
-  worktree is clean.
-- **No PR without proof.** `pr` requires passing evidence, a clean tree, fresh
-  design/plan approvals, and an approved self-review. `verify` may be re-run on a
-  `verified` task to refresh evidence after a rebase.
+- **Trust is explicit.** `init` never runs a gate. `trust` shows every command and
+  binds approval to the exact config hash. State and trust live in the project root;
+  a tracked `.codeflow/state` file is refused. A task-branch config needs its own
+  approval, and a config change invalidates evidence.
+- **Evidence is tree-based.** A rebase may change the commit ID; evidence is reusable
+  only when the tree hash, config hash, gate set, and branch match, and the worktree is
+  clean. Verification never falls back to the primary checkout.
+- **No PR without proof.** `pr` requires a task worktree on `task.branch`, passing
+  evidence, a clean tree, fresh design/plan approvals, an approved self-review whose
+  hash matches the packet, and a PR head equal to the verified HEAD. `--no-push` only
+  renders the body. `verify` may be re-run on a `verified` task to refresh evidence.
 - **No merge.** There is no merge command. The skill forbids `gh pr merge`.
+- **No false green.** A repository with no checks reports `none`, never success.
 - **No forced finish of an open PR.** `finish --force` only bypasses a dirty
   worktree. When `gh` reports the PR open, `finish` refuses regardless of
-  `--confirm` or `--force`.
+  `--confirm` or `--force`; a `gh` auth or network failure is blocked, not treated as
+  absent merge detection.
 - **No gate weakening.** The skill forbids editing tests, adding skips, or adding
   `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `biome-ignore`, or `as any`
   to make a gate pass.
@@ -319,7 +326,7 @@ for commands that omit `--task`.
 bin/codeflow              executable entry
 src/                      deterministic CLI modules
 commands/                 Claude Code slash commands
-skills/codeflow/          L1 policy and red lines
+skills/codeflow/          workflow policy and red lines
 hooks/                    SessionStart status injection
 test/                     node:test suites, fake gates, fake gh
 docs/                     goal, architecture, contracts, design
@@ -329,7 +336,7 @@ docs/                     goal, architecture, contracts, design
 ## Design docs
 
 - [`docs/goal-and-requirements.md`](docs/goal-and-requirements.md) — product goal,
-  L1 boundary, non-goals, success metrics.
+  human boundary, non-goals, success metrics.
 - [`docs/architecture.md`](docs/architecture.md) — topology, numbered decisions,
   invariants, trust, evidence, safety.
 - [`docs/contracts.md`](docs/contracts.md) — the JSON wire and every artifact
@@ -340,7 +347,7 @@ docs/                     goal, architecture, contracts, design
 ## Development
 
 ```bash
-npm test                  # 86 tests: temporary repos, fake gates, fake gh
+npm test                  # 100 tests: temporary repos, fake gates, fake gh
 npm run check             # node --check on every source file
 claude plugin validate .  # manifest, commands, hooks, marketplace
 ```

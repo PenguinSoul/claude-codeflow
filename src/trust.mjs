@@ -11,13 +11,44 @@ export function commandsFor(config) {
   }));
 }
 
+function approvalsOf(trust) {
+  if (!trust) {
+    return [];
+  }
+  if (Array.isArray(trust.approvals)) {
+    return trust.approvals;
+  }
+  if (trust.configHash && trust.approvedBy) {
+    return [
+      {
+        configHash: trust.configHash,
+        approvedBy: trust.approvedBy,
+        approvedAt: trust.approvedAt,
+        commands: trust.commands ?? [],
+      },
+    ];
+  }
+  return [];
+}
+
 export function trustConfig(paths, config, approvedBy) {
-  const trust = {
-    schemaVersion: 1,
+  const previous = readTrust(paths);
+  const approval = {
     configHash: configHash(config),
     approvedBy,
     approvedAt: nowIso(),
     commands: commandsFor(config),
+  };
+  const approvals = [
+    ...approvalsOf(previous).filter(
+      (entry) => entry.configHash !== approval.configHash,
+    ),
+    approval,
+  ].slice(-20);
+  const trust = {
+    schemaVersion: 1,
+    ...approval,
+    approvals,
   };
   writeTrust(paths, trust);
   return trust;
@@ -25,16 +56,19 @@ export function trustConfig(paths, config, approvedBy) {
 
 export function assertTrusted(paths, config) {
   const trust = readTrust(paths);
-  if (!trust) {
-    throw new CodedError(
-      ERROR_CODES.TRUST_REQUIRED,
-      "the config is not trusted",
-      { configHash: configHash(config) },
-      "Review the gate commands, then run `codeflow trust --yes`.",
-    );
-  }
   const current = configHash(config);
-  if (trust.configHash !== current) {
+  const approval = approvalsOf(trust).find(
+    (entry) => entry.configHash === current,
+  );
+  if (!approval) {
+    if (!trust) {
+      throw new CodedError(
+        ERROR_CODES.TRUST_REQUIRED,
+        "the config is not trusted",
+        { configHash: current },
+        "Review the gate commands, then run `codeflow trust --yes`.",
+      );
+    }
     throw new CodedError(
       ERROR_CODES.TRUST_STALE,
       "the config changed since it was trusted",
@@ -42,5 +76,12 @@ export function assertTrusted(paths, config) {
       "Review the new commands, then run `codeflow trust --yes` again.",
     );
   }
-  return trust;
+  return approval;
+}
+
+export function isTrusted(paths, config) {
+  const trust = readTrust(paths);
+  return approvalsOf(trust).some(
+    (entry) => entry.configHash === configHash(config),
+  );
 }

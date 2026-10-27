@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.mjs";
-import { capture, cleanup, tempDir, tempRepo } from "./helpers.mjs";
+import { capture, cleanup, fakeGhEnv, tempDir, tempRepo } from "./helpers.mjs";
 
 async function invoke(args, cwd, env) {
   const out = capture();
@@ -75,6 +75,16 @@ test("status without config returns E_CONFIG", async (t) => {
   const result = await invoke(["status", "--json"], dir);
   assert.equal(result.code, 2);
   assert.equal(result.json.error.code, "E_CONFIG");
+});
+
+test("status rejects a task id that escapes the state directory", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await invoke(["init", "--json"], dir);
+
+  const result = await invoke(["status", "--task", "../escape", "--json"], dir);
+  assert.equal(result.code, 2);
+  assert.equal(result.json.error.code, "E_USAGE");
 });
 
 test("doctor without config still reports checks", async (t) => {
@@ -281,7 +291,11 @@ test("status reports a stale approval after the task-spec changes", async (t) =>
   );
 });
 
-async function setupActiveTask(dir, command, options = {}) {
+async function setupActiveTask(dir, command, options = {}, t = null) {
+  const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-worktrees-"));
+  if (t) {
+    t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+  }
   const {
     failOn = [],
     trust = true,
@@ -290,6 +304,7 @@ async function setupActiveTask(dir, command, options = {}) {
   await invoke(["init", "--json"], dir);
   const configFile = join(dir, ".codeflow/config.json");
   const config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.worktreeRoot = worktreeRoot;
   config.gates = [
     {
       name: "test",
@@ -303,6 +318,10 @@ async function setupActiveTask(dir, command, options = {}) {
   ];
   config.attention.failOn = failOn;
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  execFileSync("git", ["add", ".codeflow/config.json"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "test: commit codeflow config"], {
+    cwd: dir,
+  });
   if (trust) {
     assert.equal((await invoke(["trust", "--yes", "--json"], dir)).code, 0);
   }
@@ -336,13 +355,11 @@ async function setupActiveTask(dir, command, options = {}) {
     )}\n`,
   );
   assert.equal((await invoke(["approve", "plan", "--json"], dir)).code, 0);
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
 
   const taskFile = join(dir, ".codeflow/state/tasks", taskId, "task.json");
   const task = JSON.parse(readFileSync(taskFile, "utf8"));
-  task.status = "active";
-  writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
-
-  return { taskId, configFile, taskFile };
+  return { taskId, configFile, taskFile, worktree: task.worktree };
 }
 
 test("verify passes, records evidence, and marks the task verified", async (t) => {
@@ -351,6 +368,8 @@ test("verify passes, records evidence, and marks the task verified", async (t) =
   const { taskId } = await setupActiveTask(
     dir,
     'node -e "process.exit(0)"',
+    {},
+    t,
   );
 
   const result = await invoke(["verify", "--json"], dir);
@@ -366,7 +385,7 @@ test("verify passes, records evidence, and marks the task verified", async (t) =
 test("verify refuses an untrusted config", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
-  await setupActiveTask(dir, 'node -e "process.exit(0)"', { trust: false });
+  await setupActiveTask(dir, 'node -e "process.exit(0)"', { trust: false }, t);
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 6);
@@ -376,7 +395,7 @@ test("verify refuses an untrusted config", async (t) => {
 test("a failing required gate exits 1 and records a failed evidence file", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
-  await setupActiveTask(dir, 'node -e "process.exit(1)"');
+  await setupActiveTask(dir, 'node -e "process.exit(1)"', {}, t);
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 1);
@@ -390,14 +409,15 @@ test("a failing required gate exits 1 and records a failed evidence file", async
 test("attention failOn blocks the task", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
-  const { taskId } = await setupActiveTask(
+  const { taskId, worktree } = await setupActiveTask(
     dir,
     'node -e "process.exit(0)"',
     { failOn: ["suppression"] },
+    t,
   );
 
-  writeFileSync(join(dir, "auth.ts"), "// @ts-ignore\nexport const a = 1;\n");
-  execFileSync("git", ["add", "-A"], { cwd: dir });
+  writeFileSync(join(worktree, "auth.ts"), "// @ts-ignore\nexport const a = 1;\n");
+  execFileSync("git", ["add", "-A"], { cwd: worktree });
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 1);
@@ -429,6 +449,10 @@ async function setupPlannedTask(dir, t) {
     },
   ];
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  execFileSync("git", ["add", ".codeflow/config.json"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "test: commit codeflow config"], {
+    cwd: dir,
+  });
   assert.equal((await invoke(["trust", "--yes", "--json"], dir)).code, 0);
 
   const created = await invoke(["new", "Fix login", "--json"], dir);
@@ -568,8 +592,15 @@ exit 1
 test("self-review, approve, pr, watch, and comments form the delivery flow", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
+  const bare = mkdtempSync(join(tmpdir(), "codeflow-origin-"));
+  t.after(() => rmSync(bare, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--bare", "-b", "main", bare], {
+    stdio: "ignore",
+  });
   const planned = await setupPlannedTask(dir, t);
-  const env = fakeGh(t);
+  execFileSync("git", ["remote", "set-url", "origin", bare], { cwd: dir });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir });
+  const env = fakeGhEnv(t);
 
   assert.equal((await invoke(["start", "--json"], dir)).code, 0);
   assert.equal((await invoke(["verify", "--json"], dir)).code, 0);
@@ -579,8 +610,8 @@ test("self-review, approve, pr, watch, and comments form the delivery flow", asy
     0,
   );
 
-  const pr = await invoke(["pr", "--no-push", "--json"], dir, env);
-  assert.equal(pr.code, 0);
+  const pr = await invoke(["pr", "--json"], dir, env);
+  assert.equal(pr.code, 0, pr.err || pr.out);
   assert.equal(pr.json.data.mode, "gh");
   assert.equal(pr.json.data.number, 7);
   assert.ok(existsSync(join(dir, ".codeflow/state/tasks", planned.taskId, "pr.json")));

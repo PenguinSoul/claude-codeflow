@@ -26,7 +26,7 @@ tags: [architecture, l1, workflow]
 ```
 Claude Code
   ├─ commands/*.md          thin UX; call the CLI and read its JSON
-  ├─ skills/codeflow/       policy: L1 boundary, human gates, red lines
+  ├─ skills/codeflow/       policy: human boundary, human gates, red lines
   └─ hooks/session-start    inject the active task summary
             │
             ▼
@@ -129,7 +129,7 @@ The plugin integrates through commands and `bin/` on `PATH`, not through an MCP
 server.
 
 **Why:** the CLI is already a stable tool boundary; MCP adds lifecycle, schema, and
-transport work without changing the L1 behavior.
+transport work without changing the workflow behavior.
 
 **Rejected:** MCP-first design; a hybrid CLI plus MCP from day one. Revisit only when
 Claude Desktop or non-Claude-Code clients become a requirement.
@@ -139,14 +139,18 @@ Claude Desktop or non-Claude-Code clients become a requirement.
 Trust, design approval, plan approval, self-review, and merge are human. The CLI
 exposes no merge command and the skill forbids `gh pr merge`.
 
-**Why:** L1 means the machine executes, not decides. Merge is the irreversible point.
+**Why:** The human-gated model means the machine executes, not decides. Merge is the irreversible point.
 
 **Rejected:** auto-merge for low-risk paths; a `--merge` escape hatch.
 
 ### D5 — Trust is explicit and config-hash-bound
 
 `init` writes configuration; `trust` displays every gate command and records approval
-of the exact config hash. `verify` refuses to run when trust is missing or stale.
+of the exact config hash. Approvals are kept per config hash so a project config and a
+task-branch config can both be reviewed without losing history. `verify` refuses to run
+when no approval exists for the config under test. State and trust live in the project
+root, and any tracked `.codeflow/state` file is refused: a cloned repository must not be
+able to supply its own trust or evidence.
 
 **Why:** a cloned repository's config is untrusted input. Running its commands without
 approval is remote code execution.
@@ -178,17 +182,21 @@ fragile seam that breaks on a log line.
 
 **Rejected:** scraping human output; a separate RPC protocol.
 
-### D8 — Repo-local state, XDG worktrees
+### D8 — One project root, one task tree
 
-Config and task state live under `.codeflow/` in the repository; the state directory
-is added to `.git/info/exclude`, not `.gitignore`, so clones stay clean. Worktrees
-live under `~/.local/state/codeflow/worktrees/<repo>/<task>` by default.
+A repository has a **project root** (the primary worktree) and any number of **task
+trees** (linked worktrees). The project root owns `.codeflow/state` and trust, and
+resolves them regardless of the current directory. A task tree owns the config, diff,
+gates, and evidence under test. `verify`, `pr`, `self-review`, `status`, `watch`, and
+`comments` read the task tree's config; `start` requires `.codeflow/config.json` to be
+committed on the base branch.
 
-**Why:** state is discoverable next to the work and survives tool upgrades; worktrees
-do not pollute the repository or get committed.
+**Why:** state is a property of the project, while the config and evidence are
+properties of the tree that will ship. Putting state in each worktree splits the task
+across checkouts; reading config only from the project root verifies the wrong gates.
 
-**Rejected:** all state in `~/.codeflow` (invisible, hard to inspect); worktrees inside
-the repository (recursive scan and editor noise); committing state.
+**Rejected:** state per worktree (split brain); config from the project root (stale
+gate set); worktrees inside the repository (recursive scan and editor noise).
 
 ### D9 — Multiple tasks; per-task locks
 
@@ -226,13 +234,18 @@ an LLM judge as the pass/fail authority.
 
 ### D12 — Approvals are hash-bound
 
-Design approval records a hash of `TASK.md`; plan approval records a hash of
-`plan.json`; self-review records the diff hash and evidence hash. Editing the approved
-artifact invalidates the approval and blocks `start` or `pr`.
+Design approval records a hash of `TASK.md`; plan approval records a hash over the
+immutable fields of `plan.json` (step id, title, commit subject, and verification);
+self-review approval records the hash of the approved review packet plus the diff and
+evidence hashes. Editing an approved artifact invalidates the approval and blocks
+`start` or `pr`. Step progress (status, summary, note) is mutable and does not
+invalidate the plan approval.
 
-**Why:** approval of an old version is not approval of what will ship.
+**Why:** approval of an old version is not approval of what will ship, but recording
+that a step finished is not a new plan.
 
-**Rejected:** a boolean `approved` flag; approval by chat message.
+**Rejected:** a boolean `approved` flag; approval by chat message; freezing progress
+into the approved artifact.
 
 ### D13 — Gate tiers and change kinds
 
@@ -261,8 +274,11 @@ failed gate.
 ### D15 — `gh` is the only GitHub integration
 
 PR creation, checks, and comments go through the user's authenticated `gh`. No tokens
-are stored. When `gh` is missing or unauthenticated, codeflow pushes the branch and
-prints a compare URL plus the rendered body.
+are stored. When `gh` is missing, codeflow pushes the branch and prints a compare URL
+plus the rendered body. An installed but unauthenticated `gh` fails closed with
+`E_GH_AUTH`; it does not silently switch modes. If a PR is recorded and `gh` cannot read
+it (auth or network failure), delivery and `finish` also fail closed; they do not
+pretend merge detection is unavailable.
 
 **Why:** no token storage, no OAuth app, and the user's existing permissions apply.
 
@@ -324,15 +340,36 @@ suite that stops running.
 
 **Rejected:** recorded HTTP cassettes as the primary test; live `gh` in CI.
 
+### D21 — Delivery is bound to the task tree
+
+`verify`, `self-review`, `approve self-review`, `pr`, `watch`, and `comments` refuse a
+missing task worktree; they never fall back to the primary checkout. The worktree must
+be on `task.branch`. Before a PR is recorded, the head returned by `gh` must equal the
+verified local HEAD. `pr --no-push` writes `PR_BODY.md` and stops: it never pushes,
+creates a PR, or marks the task delivered. Task IDs must match the documented pattern
+before any path join, and the PR template must resolve inside the task worktree.
+
+**Why:** evidence for one tree and a PR for another is not evidence. A fallback to the
+base checkout can verify `main` and then push a stale task branch.
+
+**Rejected:** best-effort worktree fallback; trusting the branch name without checking
+the checkout; creating a PR without a matching head.
+
 ## Invariants
 
 - One writer per task at a time; all state writes are atomic.
+- Project state and trust are never tracked by git; a tracked state file is refused.
 - No command writes to the base branch, force-pushes it, or checks it out destructively.
 - No PR without fresh, passing evidence, a clean tree, and a self-review sign-off.
 - No merge command exists; the skill forbids `gh pr merge`.
 - No gate runs without a valid trust grant for the current config hash.
 - No state transition is skipped; each transition has a guard.
-- Approval hashes must match the current artifact.
+- Approval hashes must match the current artifact, including the self-review packet.
+- Evidence is bound to the task tree, its config, and `task.branch`; a missing or
+  mismatched worktree is refused.
+- A PR head reported by `gh` must match the verified local HEAD.
+- `pr --no-push` renders only; it never pushes or creates a PR.
+- Empty check results are reported as `none`, never as success.
 - Evidence never claims a gate that did not run; a skipped gate is recorded as skipped.
 - Config changes invalidate trust and evidence.
 - Worktree removal requires a clean tree or explicit `--force` with human confirmation.
@@ -663,7 +700,7 @@ These are explicit later decisions, not omissions:
 - Screenshot capture automation.
 - Issue-tracker integration.
 - Multi-repository orchestration.
-- L2: agent fixes review comments.
+- Review-response automation: the agent fixes review comments.
 - Web UI or dashboard.
 - Task garbage collection and retention policy.
 - Agent-compliance evals for the skill and commands.

@@ -96,6 +96,37 @@ test("buildReviewPacket writes the packet and approveSelfReview signs it", (t) =
   );
 });
 
+test("editing an approved review packet invalidates the sign-off", (t) => {
+  const { dir, config, paths, task, evidence } = setup(t);
+  buildReviewPacket({
+    paths,
+    task,
+    cwd: dir,
+    base: config.baseBranch,
+    plan: { steps: [] },
+    evidence,
+  });
+  approveSelfReview(paths, task, {
+    cwd: dir,
+    base: config.baseBranch,
+    by: "Test <t@t>",
+  });
+
+  const review = readReview(paths, task.id);
+  review.notes = "changed after approval";
+  writeFileSync(
+    taskFile(paths, task.id, "review.json"),
+    `${JSON.stringify(review, null, 2)}\n`,
+  );
+
+  const fresh = selfReviewFresh(paths, task, {
+    cwd: dir,
+    base: config.baseBranch,
+  });
+  assert.equal(fresh.fresh, false);
+  assert.equal(fresh.reason, "review changed");
+});
+
 test("a changed diff invalidates the self-review", (t) => {
   const { dir, config, paths, task, evidence } = setup(t);
   git(dir, ["switch", "-c", "codeflow/test"]);

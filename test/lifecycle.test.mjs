@@ -83,6 +83,8 @@ async function setupPlanned(dir, t) {
     },
   ];
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  git(dir, ["add", ".codeflow/config.json"]);
+  git(dir, ["commit", "-m", "test: commit codeflow config"]);
   assert.equal((await invoke(["trust", "--yes", "--json"], dir)).code, 0);
 
   const created = await invoke(["new", "Fix login", "--json"], dir);
@@ -261,6 +263,94 @@ test("finish keeps the PR state open when cleanup is refused", async (t) => {
   assert.equal(existsSync(delivered.worktree), true);
 });
 
+test("the task workflow runs from the task worktree", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+
+  const status = await invoke(["status", "--json"], planned.worktree);
+  assert.equal(status.code, 0, status.err || status.out);
+  assert.equal(status.json.data.task.id, planned.taskId);
+
+  const verified = await invoke(["verify", "--json"], planned.worktree);
+  assert.equal(verified.code, 0, verified.err || verified.out);
+  assert.equal(verified.json.data.result, "pass");
+});
+
+test("verify refuses a missing task worktree", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+  rmSync(planned.worktree, { recursive: true, force: true });
+
+  const result = await invoke(["verify", "--json"], dir);
+  assert.equal(result.code, 3);
+  assert.equal(result.json.error.code, "E_WORKTREE_MISSING");
+});
+
+test("a task config change requires its own trust approval", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+
+  const configFile = join(planned.worktree, ".codeflow/config.json");
+  const config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.gates[0].command = 'node -e "process.exit(1)"';
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  git(planned.worktree, ["add", ".codeflow/config.json"]);
+  git(planned.worktree, ["commit", "-m", "test: change the gate command"]);
+
+  const refused = await invoke(["verify", "--json"], dir);
+  assert.equal(refused.code, 6);
+  assert.equal(refused.json.error.code, "E_TRUST_STALE");
+
+  const approved = await invoke(["trust", "--yes", "--json"], planned.worktree);
+  assert.equal(approved.code, 0, approved.err || approved.out);
+
+  const verified = await invoke(["verify", "--json"], dir);
+  assert.equal(verified.code, 1);
+  assert.equal(verified.json.data.result, "fail");
+  assert.equal(verified.json.data.gates[0].exitCode, 1);
+});
+
+test("pr --no-push renders only and does not deliver", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  await verifyAndReview(dir);
+
+  const rendered = await invoke(["pr", "--no-push", "--json"], dir);
+  assert.equal(rendered.code, 0, rendered.err || rendered.out);
+  assert.equal(rendered.json.data.rendered, true);
+  assert.equal(rendered.json.data.pushed, false);
+  assert.equal(
+    existsSync(
+      join(dir, ".codeflow/state/tasks", planned.taskId, "pr.json"),
+    ),
+    false,
+  );
+
+  const task = JSON.parse(readFileSync(planned.taskFile, "utf8"));
+  assert.equal(task.status, "verified");
+});
+
+test("finish refuses when gh cannot read the PR state", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+  });
+  const failing = fakeGhEnv(t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+    failPrView: true,
+  });
+
+  const refused = await invoke(["finish", "--confirm", "--json"], dir, failing);
+  assert.equal(refused.code, 5);
+  assert.equal(refused.json.error.code, "E_GH_AUTH");
+
+  const task = JSON.parse(readFileSync(delivered.taskFile, "utf8"));
+  assert.equal(task.status, "pr_open");
+});
+
 test("watch --wait polls until checks settle", async (t) => {
   const { dir } = repoWithRemote(t);
   const delivered = await deliver(dir, t, {
@@ -282,6 +372,8 @@ test("watch --wait polls until checks settle", async (t) => {
   assert.equal(watch.json.data.timedOut, false);
   assert.equal(watch.json.data.waited, true);
   assert.ok(watch.json.data.polls >= 1);
+  assert.equal(watch.json.data.mergeStateStatus, "BLOCKED");
+  assert.equal(watch.json.data.reviewDecision, "");
   assert.ok(delivered.worktree);
 });
 

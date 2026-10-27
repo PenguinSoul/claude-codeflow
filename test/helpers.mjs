@@ -90,6 +90,7 @@ export function fakeGhEnv(t, options = {}) {
   const {
     prState = "OPEN",
     checks = ["SUCCESS", "PENDING"],
+    failPrView = false,
   } = options;
   const sequence = checks.length > 0 ? checks : ["SUCCESS"];
   const cases = sequence
@@ -112,6 +113,7 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo '[]'; exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/o/r/pull/7"; exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+${failPrView ? '  echo "gh: authentication failed" >&2\n  exit 1' : ""}
   counter="$(dirname "$0")/view-count"
   n=0
   if [ -f "$counter" ]; then n=$(cat "$counter"); fi
@@ -121,7 +123,8 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
 ${cases}
     *) rollup='${fallback}' ;;
   esac
-  echo "{\\"number\\":7,\\"url\\":\\"https://github.com/o/r/pull/7\\",\\"state\\":\\"${prState}\\",\\"headRefOid\\":\\"abc\\",\\"statusCheckRollup\\":[$rollup],\\"mergeStateStatus\\":\\"BLOCKED\\",\\"reviewDecision\\":\\"\\"}"
+  head=$(git rev-parse HEAD 2>/dev/null || echo abc)
+  echo "{\\"number\\":7,\\"url\\":\\"https://github.com/o/r/pull/7\\",\\"state\\":\\"${prState}\\",\\"headRefOid\\":\\"$head\\",\\"statusCheckRollup\\":[$rollup],\\"mergeStateStatus\\":\\"BLOCKED\\",\\"reviewDecision\\":\\"\\"}"
   exit 0
 fi
 if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi

@@ -118,6 +118,10 @@ export function buildReviewPacket(options) {
   return review;
 }
 
+export function reviewHash(review) {
+  return sha256(stableStringify(review));
+}
+
 export function approveSelfReview(paths, task, options) {
   const {
     cwd,
@@ -170,7 +174,7 @@ export function approveSelfReview(paths, task, options) {
   writeJsonAtomic(taskFile(paths, task.id, "review.json"), review);
 
   task.approvals.selfReview = {
-    hash: sha256(stableStringify(review)),
+    hash: reviewHash(review),
     approvedBy: by,
     approvedAt: review.reviewedAt,
     note: review.notes,
@@ -187,6 +191,12 @@ export function selfReviewFresh(paths, task, options) {
   const review = readReview(paths, task.id);
   if (!review || !review.reviewedBy) {
     return { review, fresh: false, reason: "not approved" };
+  }
+  if (!task.approvals?.selfReview) {
+    return { review, fresh: false, reason: "not approved" };
+  }
+  if (task.approvals.selfReview.hash !== reviewHash(review)) {
+    return { review, fresh: false, reason: "review changed" };
   }
   const evidence = readEvidence(paths, task.id);
   if (!evidence) {

@@ -77,6 +77,9 @@ export function isFresh(evidence, expected) {
   if (expected.dirty === true) {
     return false;
   }
+  if (expected.branch && evidence?.branch !== expected.branch) {
+    return false;
+  }
   return Boolean(
     evidence &&
       evidence.result === "pass" &&

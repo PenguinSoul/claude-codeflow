@@ -217,6 +217,15 @@ export function validateConfig(config) {
   } else {
     if (typeof config.pr.template !== "string" || !config.pr.template.trim()) {
       errors.push("pr.template must be a non-empty string");
+    } else if (
+      path.isAbsolute(config.pr.template) ||
+      /^[A-Za-z]:[\\/]/.test(config.pr.template) ||
+      config.pr.template.startsWith("\\\\") ||
+      config.pr.template.split(/[\\/]/).includes("..")
+    ) {
+      errors.push(
+        "pr.template must be repository-relative and must not escape the repository",
+      );
     }
     const screenshots = config.pr.screenshots;
     if (

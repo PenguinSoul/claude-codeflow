@@ -2,7 +2,7 @@
   "name": "codeflow",
   "displayName": "Codeflow",
   "version": "0.1.0",
-  "description": "L1 workflow executor for Claude Code: task-spec, worktree, gates, evidence, and pull requests.",
+  "description": "Human-gated delivery workflow for Claude Code: task-spec, worktree, gates, evidence, and pull requests.",
   "author": {
     "name": "PenguinSoul"
   },

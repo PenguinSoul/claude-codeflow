@@ -107,6 +107,19 @@ export function isClean(cwd) {
   return git(["status", "--porcelain"], { cwd }).length === 0;
 }
 
+export function assertWorktreeBranch(cwd, branch) {
+  const current = git(["branch", "--show-current"], { cwd });
+  if (current !== branch) {
+    throw new CodedError(
+      ERROR_CODES.WORKTREE_MISMATCH,
+      "the task worktree is not on the task branch",
+      { expected: branch, actual: current || "(detached)" },
+      "Check out the task branch in the worktree, or run `codeflow start` again.",
+    );
+  }
+  return current;
+}
+
 function resolveBaseRef(cwd, remote, base) {
   if (remote) {
     const fetched = gitOrNull(["fetch", "--quiet", remote, base], { cwd });

@@ -117,3 +117,15 @@ test("validateConfig rejects a stateDir that escapes the repository", () => {
     validateConfig(config).some((error) => error.includes("stateDir")),
   );
 });
+
+test("validateConfig rejects a PR template outside the repository", () => {
+  const config = defaultConfig({ baseBranch: "main", remote: "origin" });
+  config.pr.template = "../secret.md";
+  assert.ok(
+    validateConfig(config).some((error) => error.includes("pr.template")),
+  );
+  config.pr.template = "C:\\secrets\\template.md";
+  assert.ok(
+    validateConfig(config).some((error) => error.includes("pr.template")),
+  );
+});
