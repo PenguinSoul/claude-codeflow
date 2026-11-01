@@ -64,11 +64,13 @@ Rules:
 | Code | Exit | Meaning |
 | --- | --- | --- |
 | `E_STATE_TRACKED` | `6` | `.codeflow/state` is tracked by git and cannot be trusted |
+| `E_SCHEMA_UNSUPPORTED` | `2` | An artifact has an unsupported `schemaVersion` |
 | `E_WORKTREE_MISSING` | `3` | The task worktree is required but missing |
 | `E_WORKTREE_MISMATCH` | `3` | The worktree is not on `task.branch` |
 | `E_TRUST_REQUIRED` | `6` | No approval exists for the current config hash |
 | `E_TRUST_STALE` | `6` | The config hash has no matching approval |
 | `E_APPROVAL_STALE` | `3` | An approved artifact or the self-review packet changed |
+| `E_LOCKED` | `3` | A task or project lock is held |
 | `E_PUSH_FAILED` | `4` | Push failed or the PR head does not match the verified HEAD |
 
 ## Error object
@@ -781,21 +783,27 @@ to confirm.
   "checks": [
     { "name": "node", "ok": true, "detail": "v26.11.1" },
     { "name": "git", "ok": true, "detail": "2.56.0" },
-    { "name": "gh", "ok": false, "detail": "not installed; PR creation will use compare URL" },
-    { "name": "trust", "ok": true, "detail": "config hash matches" }
+    { "name": "gh", "ok": true, "detail": "/usr/bin/gh" },
+    { "name": "ghAuth", "ok": true, "detail": "authenticated" },
+    { "name": "worktreeRoot", "ok": true, "detail": "/home/user/.local/state/codeflow/worktrees" },
+    { "name": "trust", "ok": true, "detail": "config hash matches" },
+    { "name": "schema", "ok": true, "detail": "config 1; supported: task, plan, evidence" },
+    { "name": "locks", "ok": true, "detail": "no active locks" }
   ]
 }
 ```
 
 `doctor` checks: Node version, git repository, config parse, trust hash, `gh` presence
-and auth, worktree root writability, artifact schema versions, and stale locks. A
-failed check never changes repository state.
+and auth, worktree root writability, state writability, artifact schema versions, and
+stale locks. A failed check never changes repository state.
 
 ## Schema evolution
 
 - Additive fields are allowed within a `schemaVersion`.
 - Removing or renaming a field, changing its type, or changing semantics requires a
   version bump.
-- The CLI rejects artifacts newer than it supports (`E_SCHEMA_UNSUPPORTED`).
-- Older artifacts are migrated with a backup under `.codeflow/state/backups/`.
-- Migrations are pure functions with fixtures, not best-effort reads.
+- The CLI rejects any artifact whose `schemaVersion` is not supported
+  (`E_SCHEMA_UNSUPPORTED`).
+- Only `schemaVersion: 1` exists today. A migration for an older version must land
+  with the first compatibility need; migrations are pure functions with fixtures, not
+  best-effort reads. `doctor` reports the versions it finds.

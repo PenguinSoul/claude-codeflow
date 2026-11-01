@@ -2,6 +2,7 @@ import { CodedError, ERROR_CODES } from "./contracts.mjs";
 import { evidenceHash, readEvidence } from "./evidence.mjs";
 import { git } from "./git.mjs";
 import { planStateHash, readPlan } from "./plan.mjs";
+import { assertSchema } from "./schema.mjs";
 import { taskFile, writeTask } from "./state.mjs";
 import { appendEvent } from "./task.mjs";
 import {
@@ -24,7 +25,9 @@ export function diffStat(cwd, base) {
 }
 
 export function readReview(paths, taskId) {
-  return readJsonSafe(taskFile(paths, taskId, "review.json"));
+  const file = taskFile(paths, taskId, "review.json");
+  const value = readJsonSafe(file);
+  return value ? assertSchema(value, "review", file) : null;
 }
 
 function renderReview(review, context) {

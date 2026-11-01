@@ -78,6 +78,7 @@ import {
   acquireProjectLock,
   ensureState,
   readActive,
+  readPr,
   readTask,
   releaseLock,
   releaseProjectLock,
@@ -1193,7 +1194,7 @@ function resumeCommand(repo, config, flags) {
 }
 
 function mergeDetection(repo, task, paths, env) {
-  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  const pr = readPr(paths, task.id);
   if (!pr || pr.mode !== "gh" || !pr.number) {
     return { available: false, merged: false, reason: "no GitHub PR" };
   }
@@ -1990,7 +1991,7 @@ async function watchCommand(repo, config, flags, env) {
       { status: task?.status ?? null },
     );
   }
-  let pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  let pr = readPr(paths, task.id);
   if (!pr || pr.mode !== "gh" || !pr.number) {
     throw new CodedError(
       ERROR_CODES.GH_MISSING,
@@ -2050,7 +2051,7 @@ async function watchCommand(repo, config, flags, env) {
     force: flags.forceUnlock,
   });
   try {
-    pr = readJsonSafe(taskFile(paths, task.id, "pr.json")) ?? pr;
+    pr = readPr(paths, task.id) ?? pr;
     pr.checks = checks;
     pr.mergeStateStatus = status.mergeStateStatus;
     pr.reviewDecision = status.reviewDecision;
@@ -2099,7 +2100,7 @@ function commentsCommand(repo, config, flags, env) {
       { status: task?.status ?? null },
     );
   }
-  const pr = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+  const pr = readPr(paths, task.id);
   if (!pr || pr.mode !== "gh" || !pr.number) {
     throw new CodedError(
       ERROR_CODES.GH_MISSING,
@@ -2232,7 +2233,7 @@ function statusCommand(repo, config, flags) {
 
   let pr = null;
   if (task) {
-    const value = readJsonSafe(taskFile(paths, task.id, "pr.json"));
+    const value = readPr(paths, task.id);
     if (value) {
       pr = {
         mode: value.mode,
@@ -2290,9 +2291,9 @@ function statusCommand(repo, config, flags) {
   };
 }
 
-function doctorCommand(repo, config, configError) {
+function doctorCommand(repo, config, configError, env) {
   return {
-    data: runDoctor(repo, config, configError),
+    data: runDoctor(repo, config, configError, env),
   };
 }
 
@@ -2455,7 +2456,7 @@ export async function run(argv, io = {}) {
         break;
       }
       case "doctor": {
-        result = doctorCommand(repo, projectConfig, configError);
+        result = doctorCommand(repo, projectConfig, configError, env);
         break;
       }
       default:

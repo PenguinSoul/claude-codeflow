@@ -300,7 +300,7 @@ docs/                     目标、架构、契约、设计
 ## 开发
 
 ```bash
-npm test                  # 111 个测试：临时仓库、fake gate、fake gh
+npm test                  # 114 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```

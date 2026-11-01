@@ -360,7 +360,7 @@ docs/                     goal, architecture, contracts, design
 ## Development
 
 ```bash
-npm test                  # 111 tests: temporary repos, fake gates, fake gh
+npm test                  # 114 tests: temporary repos, fake gates, fake gh
 npm run check             # node --check on every source file
 claude plugin validate .  # manifest, commands, hooks, marketplace
 ```

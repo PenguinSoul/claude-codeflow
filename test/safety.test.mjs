@@ -4,7 +4,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultConfig, loadConfig } from "../src/config.mjs";
 import { findRepo } from "../src/repo.mjs";
-import { statePaths } from "../src/state.mjs";
+import { ensureState, readTask, statePaths, taskFile } from "../src/state.mjs";
 import { cleanup, tempRepo } from "./helpers.mjs";
 
 test("an unsupported config schema is rejected", (t) => {
@@ -16,7 +16,25 @@ test("an unsupported config schema is rejected", (t) => {
   writeFileSync(join(dir, ".codeflow/config.json"), JSON.stringify(config));
   assert.throws(
     () => loadConfig(dir),
-    (error) => error.code === "E_CONFIG",
+    (error) => error.code === "E_SCHEMA_UNSUPPORTED",
+  );
+});
+
+test("an unsupported task schema is rejected", (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const config = defaultConfig(findRepo(dir));
+  const paths = statePaths(dir, config);
+  ensureState(paths);
+  const id = "2026-10-27-schema";
+  mkdirSync(taskFile(paths, id, "."), { recursive: true });
+  writeFileSync(
+    taskFile(paths, id, "task.json"),
+    JSON.stringify({ schemaVersion: 99, id, status: "created" }),
+  );
+  assert.throws(
+    () => readTask(paths, id),
+    (error) => error.code === "E_SCHEMA_UNSUPPORTED",
   );
 });
 

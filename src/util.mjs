@@ -116,9 +116,9 @@ export function isContained(root, target) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-export function which(name) {
+export function which(name, env = process.env) {
   const cmd = process.platform === "win32" ? "where" : "which";
-  const result = spawnSync(cmd, [name], { encoding: "utf8" });
+  const result = spawnSync(cmd, [name], { encoding: "utf8", env });
   if (result.status === 0) {
     const found = result.stdout
       .split(/\r?\n/)
@@ -127,6 +127,9 @@ export function which(name) {
     if (found) {
       return found;
     }
+  }
+  if (env.PATH !== undefined && env.PATH.trim() === "") {
+    return null;
   }
   const fallbacks = [
     path.join(homedir(), ".local", "bin", name),
