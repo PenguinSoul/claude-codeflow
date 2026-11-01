@@ -192,7 +192,7 @@ function acquireLockFile(file, options = {}) {
       !existing ||
       age > ttlMs ||
       (existing.host === hostname() && !pidAlive(existing.pid));
-    if (force || stale) {
+    if (stale) {
       try {
         unlinkSync(file);
       } catch {
@@ -200,11 +200,19 @@ function acquireLockFile(file, options = {}) {
       }
       return acquireLockFile(file, { command, ttlMs, force: false, label });
     }
+    if (force) {
+      throw new CodedError(
+        ERROR_CODES.LOCKED,
+        `the ${label} is locked by a live process`,
+        { lock: existing },
+        "Stop the holding process or wait; --force-unlock only removes stale locks.",
+      );
+    }
     throw new CodedError(
       ERROR_CODES.LOCKED,
       `the ${label} is locked by another process`,
       { lock: existing },
-      "Wait for it to finish, or pass --force-unlock if it is stale.",
+      "Wait for it to finish, or remove the lock after confirming the holder is gone.",
     );
   }
 }
@@ -251,13 +259,5 @@ export function releaseLock(paths, taskId, options = {}) {
 
 export function releaseProjectLock(paths, options = {}) {
   return releaseLockFile(projectLockPath(paths), options);
-}
-
-export function forceUnlock(paths, taskId) {
-  return releaseLock(paths, taskId, { force: true });
-}
-
-export function forceProjectUnlock(paths) {
-  return releaseProjectLock(paths, { force: true });
 }
 

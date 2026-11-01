@@ -212,7 +212,8 @@ codeflow finish --confirm
 | `comments` | 只读收集 review 评论和解决状态，不改代码 | — |
 | `status` | 查看当前任务和下一步 | `--brief`、`--task` |
 | `resume` | 清除 blocked 状态 | `--task` |
-| `finish` | 有 `gh` 时先验证合并，再移除工作树 | `--confirm`、`--delete-branch`、`--force` |
+| `finish` | 有 `gh` 时先验证合并，再移除工作树；要求 PR 已开或已合并 | `--confirm`、`--delete-branch`、`--force` |
+| `abandon` | 丢弃不会交付的任务；拒绝已开或已合并的 PR | `--confirm`、`--delete-branch`、`--force` |
 | `doctor` | 检查环境和配置 | — |
 
 全局选项：`--json`、`--task <id>`、`--help`、`--version`。

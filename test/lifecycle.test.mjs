@@ -544,6 +544,22 @@ test("comments reports resolved and open review threads", async (t) => {
   assert.match(markdown, /\[open\]/);
 });
 
+test("abandon refuses a task with an open PR", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+  });
+
+  const result = await invoke(["abandon", "--confirm", "--json"], dir);
+  assert.equal(result.code, 3);
+  assert.equal(result.json.error.code, "E_STATE_CONFLICT");
+  assert.equal(existsSync(delivered.worktree), true);
+
+  const task = JSON.parse(readFileSync(delivered.taskFile, "utf8"));
+  assert.equal(task.status, "pr_open");
+});
+
 test("watch --wait polls until checks settle", async (t) => {
   const { dir } = repoWithRemote(t);
   const delivered = await deliver(dir, t, {

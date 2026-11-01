@@ -252,7 +252,8 @@ Every command supports `--json`.
 | `comments` | Collect review comments and resolution state without changing code | — |
 | `status` | Show the active task and next step | `--brief`, `--task` |
 | `resume` | Clear a blocked state | `--task` |
-| `finish` | Verify the merge with `gh` when available, then remove the worktree | `--confirm`, `--delete-branch`, `--force` |
+| `finish` | Verify the merge with `gh`, then remove the worktree; requires an open or merged PR | `--confirm`, `--delete-branch`, `--force` |
+| `abandon` | Discard a task that will not ship; refuses an open or merged PR | `--confirm`, `--delete-branch`, `--force` |
 | `doctor` | Check the environment and configuration | — |
 
 Global options: `--json`, `--task <id>`, `--help`, `--version`.
