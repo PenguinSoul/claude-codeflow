@@ -6,50 +6,37 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-> Claude Code 的人审交付流程：人做决定，CLI 执行，每个 Pull Request 都带着可复核的证据。
+codeflow 是一个很小的 CLI 和 Claude Code 插件，用来和 coding agent 一起干活，但不用把整个仓库交给它。
 
-codeflow 把一个 git 仓库变成可重复的 **人审交付流程**。它在 Claude Code 外面套了一层薄而确定的执行层：task-spec、计划、隔离工作树、门禁、证据、自审和 Pull Request。Claude 负责判断、文字和代码；人保留信任、设计批准、计划批准、自审和合并。
+它把一个任务从一段简短的 spec，带到 plan、隔离的 worktree、项目检查、self-review，最后开一个 PR。Claude 负责读代码、写代码；你负责批准 design、plan、self-review 和 merge。真正跑过的检查会留在磁盘上，PR 描述从这些记录生成，而不是靠 agent 回忆。
 
-**状态：** 早期、可用、刻意收窄。它不合并 PR，不自动批准 review，也不替代 CI。
+它不是 coding agent，也不会 merge。它是 agent 工作外面那层有点无聊、但需要有人认真做的文书工作。
 
----
+**状态：** 早期可用，刻意做得很小。目前主要支持 WSL/Linux；Node 20 以上。
 
-## 为什么需要它
+## 为什么做这个
 
-Agent 干活很容易开始，却很难保持诚实：
+用 agent 改真实仓库时，我反复遇到这些问题：
 
-- 状态活在聊天里，刷新一下就不知道做到哪了。
-- 门禁是临时想起来跑的，PR 描述靠回忆拼出来。
-- 并行任务挤在同一个工作区里互相踩。
-- Reviewer 看得到 diff，却看不到意图、证据、测试改动，以及最该重点看的地方。
-- 现有工具要么管得太多（自动合并、橡皮图章 review），要么管得太少（只有 prompt，没有持久状态）。
+- 刷新一下，没人知道任务做到哪了。
+- 检查是 agent 想起什么跑什么。
+- PR 描述是凭记忆写的，不是从结果来的。
+- 两个 agent 在同一个工作区里互相踩。
+- reviewer 看得到 diff，但看不到验证了什么、改了哪些测试、哪里最该先看。
 
-codeflow 把机械部分做成确定、可复核的：
+codeflow 把任务状态放到磁盘上，给每个任务一个独立 worktree，把 gate 命令摆到明面上，再把结果带进 PR。
 
-- **CLI 是唯一的状态所有者。** 聊天记忆不是状态。
-- **要证据，不要声明。** 门禁结果只存在于真正跑过并记录下来的地方。
-- **信任必须显式。** 仓库里定义的命令，在人批准精确的 config hash 之前不会执行。
-- **Spec 先于代码。** 任务从 task-spec 开始；耐久知识必须在 PR 之前回到仓库。
-- **小任务、小 PR、一个问题。**
-- **失败即停。** 歧义、冲突和不安全状态会停下来交给人。
+## 哪些事仍然由你决定
 
-## 人审边界
+1. codeflow 可以运行哪些命令。
+2. 写代码前的 task-spec。
+3. 计划。
+4. self-review 包。
+5. 合并。
 
-| 自动执行 | 仅由人完成 |
-| --- | --- |
-| 创建任务和 task-spec 脚手架 | 信任门禁命令 |
-| 校验计划 | 批准设计 |
-| 创建分支和工作树 | 批准计划 |
-| 执行门禁、记录证据 | 自审签字 |
-| 风险扫描 | 合并 |
-| 渲染 PR 描述、push、创建 PR | 冲突、歧义和安全决策 |
-| 只读观察 CI | — |
-| 只读收集 review 评论 | — |
-| 状态、恢复和清理 | — |
+codeflow 不 merge，不 approve PR，也不会把“没跑”的检查写成“通过”。
 
-codeflow 永远不会执行 `gh pr merge`，skill 里也明确禁止。评审响应自动化（agent 按 review 评论改代码）和自主合并不在范围内。
-
-## 工作方式
+## 流程
 
 ```mermaid
 flowchart LR
@@ -64,75 +51,51 @@ flowchart LR
   I --> J[approve self-review]
   J --> K[pr]
   K --> L[watch / comments]
-  L --> M[human merge]
+  L --> M[你合并]
   M --> N[finish]
 ```
 
-任务状态机：
+任务状态是 `created → designed → planned → active → verified → pr_open →
+done`。遇到 rebase 冲突、gate 失败、worktree 丢失之类的问题，任务会变成
+`blocked`，等你处理。`resume` 再继续；它不会自己重试，也不会自己解冲突。
 
-```text
-created → designed → planned → active → verified → pr_open → merged → done
-                         ↘ blocked ↗
-```
+## 一个任务里有什么
 
-每个状态转换都有守卫：
+- **`TASK.md`**：Request、Product、Design、Durable updates、Deferrals。写代码前由人批准。`pr` 要求有耐久更新记录，避免任务做完、仓库什么都没学到。
+- **`plan.json`**：按 commit 粒度的步骤，每步有标题、commit subject 和计划中的检查。批准只覆盖这些不可变字段；`plan step` 记录状态、总结和实际结果，`pr` 要求所有步骤都完成。标记 done 时必须给结果，不能只打个勾。
+- **任务 worktree**：`codeflow/<id>` 分支，加上 `~/.local/state/codeflow/worktrees/<repo>/<task>` 下的独立工作树。任务的树就是要交付的树；codeflow 不会退回去验证你的主 checkout。
+- **`evidence.json`**：跑了哪些 gate、退出码、耗时、日志、tree hash、config hash、gate-set hash、分支和 dirty 状态。rebase 之后，只有树没变才可复用。
+- **`REVIEW.md`**：diff stat、计划状态、验证结果、风险项、scope drift 和最该重点看的地方，集中在一份包里。
+- **`PR_BODY.md`**：从 task-spec、plan、evidence 和仓库自己的 PR 模板生成。
 
-- `start` 需要未过期的设计批准和计划批准。
-- `pr` 需要通过且对当前树有效的证据、干净的工作区、已批准的自审。
-- 已批准产物一旦被修改，批准就会因 hash 不匹配而失效。
-- blocked 任务必须显式 `resume`，不会被盲目重试。
-
-## 功能
-
-- **Task-spec 先行。** 每个任务都有一份简短的 `TASK.md`，包含 Request、Product、Design、Durable updates、Deferrals；人批准后才写代码，缺少耐久知识记录时 `pr` 会拒绝。
-- **按 commit 粒度的计划。** `plan.json` 的每一步都有标题、commit subject 和验证方式；计划按不可变字段的 hash 批准，`plan step` 记录状态、总结和实际结果。`pr` 要求所有步骤完成。
-- **工作树隔离。** 每个任务有 `codeflow/<id>` 分支，以及 `~/.local/state/codeflow/worktrees/<repo>/<task>` 下的独立工作树。多个任务可以并行，每个任务有自己的锁。
-- **信任绑定的门禁。** `init` 只探测候选门禁；`trust` 展示每条命令，并把批准绑定到 config hash。没有信任就不执行。
-- **变更类型推断。** `verify` 从 diff 推断 docs、test、infra 或 mixed；与任务类型不一致时使用更宽的 gate set。docs-only 任务可以不带 code gate 完成验证。
-- **基于树的证据。** `verify` 记录命令、退出码、耗时、日志、tree hash、config hash、gate-set hash 和 dirty 状态。rebase 之后，只有树没变才可复用证据。
-- **风险扫描。** 测试文件改动、被跳过的测试、suppression、配置和锁文件改动、大 diff 会被扫描；scope drift 和 closest look 通过 self-review 参数记录。它是探照灯，不是自动判决。
-- **自审包。** `REVIEW.md` 里集中呈现 diff stat、计划状态、验证表、风险项、scope drift 和最该重点看的地方。
-- **PR 模板保真。** 保留仓库的 `PULL_REQUEST_TEMPLATE.md`；只有证据能证明的 checklist 项才会打勾；模板没有 `Review attention` 时自动追加。
-- **push 前先 rebase。** `pr` 会 fetch base、rebase 任务分支，重写后用 `--force-with-lease` 推送。冲突会把任务置为 blocked；树变化会让证据失效，必须重新验证。
-- **实时合并检测。** 有 `gh` 时，`finish` 以真实 PR 状态为准。PR 还开着时，即使 `--confirm` 或 `--force` 也会拒绝；`--confirm` 只在无法检测合并时作为替代。
-- **GitHub 可选。** 有 `gh` 时，`pr` 创建或更新 PR，`watch` 读 checks，`comments` 读 review 线程及解决状态；没有 `gh` 时，`pr` 推分支并打印 compare URL。
-- **没有隐藏运行时。** 零运行时依赖，无构建步骤，纯 Node ESM。
+这些都放在 `.codeflow/state/` 下，属于本地状态，通过 `.git/info/exclude` 排除。state 和 trust 属于项目根目录，被验证的 config 来自任务 worktree。如果 `.codeflow/state` 被 git 跟踪，所有命令都会拒绝运行。
 
 ## 环境要求
 
-- Node.js **>= 20**
+- Node.js 20 或更新
 - git
 - Claude Code
-- `gh` *（可选；没有它时 PR 创建降级为 compare URL）*
-
-WSL/Linux 是第一支持平台。CLI 本身是可移植的 Node 代码，但 Windows 原生行为还没有作为门禁。
+- `gh`：可选；没有它时，`pr` 会推分支并打印 compare URL
 
 ## 安装
-
-克隆仓库：
 
 ```bash
 git clone https://github.com/PenguinSoul/codeflow.git
 cd codeflow
-```
-
-作为本地插件加载：
-
-```bash
 claude --plugin-dir .
 ```
 
-或者从本仓库作为 marketplace 安装：
+或者从仓库作为 marketplace 安装：
 
 ```text
 /plugin install codeflow --marketplace PenguinSoul/codeflow
 ```
 
-插件启用期间，它的 `bin/` 会加入 Bash 工具的 `PATH`，所以可以直接运行 `codeflow`。也可以在 checkout 里直接跑 `./bin/codeflow`。
+插件启用期间，它的 `bin/` 会加入 Bash 工具的 `PATH`。也可以直接在 checkout 里运行 `./bin/codeflow`。
 
 ## 快速开始
 
-### 在 Claude Code 里
+在 Claude Code 里：
 
 ```text
 /codeflow:init
@@ -148,49 +111,47 @@ claude --plugin-dir .
 /codeflow:pr
 ```
 
-### 在 CLI 里
+在 CLI 里：
 
 ```bash
-# 1. 探测仓库，写入 .codeflow/config.json
+# 1. 写 config，并在 start 之前提交它
 codeflow init
-# 在 start 之前提交 config
 git add .codeflow/config.json && git commit -m "chore: add codeflow config"
 
-# 2. 逐条 review 门禁命令，然后批准
+# 2. 看清楚要跑哪些命令，再批准
 codeflow trust
 codeflow trust --yes
 
-# 3. 创建任务并填写 TASK.md
+# 3. 建任务，填 .codeflow/state/tasks/<id>/TASK.md
 codeflow new "修复登录重定向"
-# 编辑 .codeflow/state/tasks/<id>/TASK.md
 codeflow approve design
 
-# 4. 创建并批准计划
+# 4. 写计划，再批准
 codeflow plan --init
 # 编辑 .codeflow/state/tasks/<id>/plan.json
 codeflow plan
 codeflow approve plan
 
-# 5. 在隔离的工作树里实现
+# 5. 在任务 worktree 里干活
 codeflow start
-# 在打印出的 worktree 里写代码；codeflow 命令可以从项目根目录
-# 或 task worktree 运行
 
-# 6. 记录步骤进度
+# 6. 记录每一步实际做了什么
 codeflow plan step 1 --status done \
-  --summary "实现了重定向保护。" \
-  --result "`npm test` → pass"
+  --summary "加了重定向保护。" \
+  --result "npm test -> pass"
 
-# 7. 验证、自审、交付
+# 7. 验证、自审、开 PR
 codeflow verify
 codeflow self-review
 codeflow approve self-review
 codeflow pr
+
+# 8. 用 GitHub 的话，看 CI 和 review 线程
 codeflow watch
 codeflow comments
 
-# 7. 人合并之后清理
-codeflow finish --confirm
+# 9. 你合并之后
+codeflow finish
 ```
 
 所有命令都支持 `--json`。
@@ -199,22 +160,22 @@ codeflow finish --confirm
 
 | 命令 | 作用 | 常用选项 |
 | --- | --- | --- |
-| `init` | 探测 base branch、包管理器和候选门禁 | `--force` |
-| `trust` | 展示并批准精确的门禁命令 | `--yes` |
-| `new <title>` | 创建任务和轻量 task-spec | `--kind`、`--issue` |
+| `init` | 探测 base branch、包管理器和候选 gate | `--force` |
+| `trust` | 展示精确的 gate 命令并记录批准 | `--yes` |
+| `new <title>` | 创建任务和 task-spec | `--kind`、`--issue` |
 | `approve <target>` | 按 hash 批准 `design`、`plan` 或 `self-review` | `--by`、`--note` |
-| `plan` | 校验并渲染计划；`plan step` 记录进度 | `--init`；`plan step <id> --status --summary --result` |
-| `start` | 创建任务分支和工作树 | `--dry-run` |
-| `verify` | 跑门禁并记录基于树的证据 | `--full`、`--live --allow-live`、`--retry` |
-| `self-review` | 生成自审包 | `--scope-drift`、`--closest-look` |
-| `pr` | 渲染 PR 描述、rebase 到 base 并创建/更新 PR；`--no-push` 只渲染 | `--no-push`、`--dry-run` |
-| `watch` | 只读查看 PR checks | `--wait`、`--timeout <s>`、`--interval <ms>` |
-| `comments` | 只读收集 review 评论和解决状态，不改代码 | — |
-| `status` | 查看当前任务和下一步 | `--brief`、`--task` |
-| `resume` | 清除 blocked 状态 | `--task` |
-| `finish` | 有 `gh` 时先验证合并，再移除工作树；要求 PR 已开或已合并 | `--confirm`、`--delete-branch`、`--force` |
-| `abandon` | 丢弃不会交付的任务；拒绝已开或已合并的 PR | `--confirm`、`--delete-branch`、`--force` |
-| `doctor` | 检查环境和配置 | — |
+| `plan` | 校验并渲染计划；`plan step` 记录进度 | `plan step <id> --status --summary --result` |
+| `start` | 创建任务分支和 worktree | `--dry-run` |
+| `verify` | 跑 gate，记录证据 | `--full`、`--live --allow-live`、`--retry` |
+| `self-review` | 生成 self-review 包 | `--scope-drift`、`--closest-look` |
+| `pr` | rebase、渲染 body、推送并创建/更新 PR | `--no-push`、`--dry-run` |
+| `watch` | 读 PR checks 和 merge 状态 | `--wait`、`--timeout <s>`、`--interval <ms>` |
+| `comments` | 读 review 线程及解决状态 | — |
+| `status` | 看当前任务和下一步 | `--brief`、`--task` |
+| `resume` | 问题解决后继续 blocked 任务 | `--task` |
+| `finish` | 验证合并，然后删 worktree | `--confirm`、`--delete-branch`、`--force` |
+| `abandon` | 丢弃不会交付的任务 | `--confirm`、`--delete-branch`、`--force` |
+| `doctor` | 检查 git、gh、登录、worktree 根目录、state、schema 和锁 | — |
 
 全局选项：`--json`、`--task <id>`、`--help`、`--version`。
 
@@ -223,7 +184,7 @@ codeflow finish --confirm
 | 退出码 | 含义 |
 | --- | --- |
 | `0` | 成功 |
-| `1` | 必需门禁失败或超时 |
+| `1` | 必需 gate 失败或超时 |
 | `2` | 用法、配置、仓库或 schema 错误 |
 | `3` | 状态冲突、批准过期或锁 |
 | `4` | Git 冲突、工作区不干净或 push 失败 |
@@ -231,6 +192,17 @@ codeflow finish --confirm
 | `6` | 信任缺失或过期 |
 | `7` | 任务 blocked，需要人处理 |
 | `8` | 非预期的内部错误 |
+
+## 安全，直说
+
+- Gate 命令就是代码。`init` 不会执行它们；`trust` 展示每一条，并把批准绑定到精确的 config hash。任务分支改了 config，就要单独批准那个 config。
+- 证据绑定到 tree、config、gate set 和分支。`pr` 会检查 worktree 是否在任务分支上、PR head 是否等于已验证的 HEAD。rebase 改了树，就重新 verify。
+- `.codeflow/state` 是本地状态。如果它被 git 跟踪，codeflow 直接拒绝运行，不会信任仓库带来的 state。
+- 仓库没有 checks 时报告 `none`，不是 success。pending 或无法判断，也不是绿。
+- `finish` 只接受已开或已合并的 PR。不会交付的任务用 `abandon`。`--force` 只绕过 dirty worktree，不绕过合并检查。
+- `gh` 装了但没登录时，交付会失败。它不会悄悄退回 compare URL，`finish` 也不会把失败当成“没有 PR”。
+- codeflow 不存 token，GitHub 认证归 `gh`。Gate 日志只在本机，里面可能有项目自己打印的敏感信息。
+- 没有 merge 命令。skill 明确禁止 `gh pr merge`。
 
 ## 产物
 
@@ -246,6 +218,7 @@ codeflow finish --confirm
 .codeflow/state/
   active.json
   trust.json
+  state.lock
   tasks/<id>/
     task.json
     TASK.md
@@ -260,42 +233,20 @@ codeflow finish --confirm
     comments.json
     COMMENTS.md
     events.jsonl
+    lock
     logs/<gate>.log
 ```
 
-工作树默认在 `~/.local/state/codeflow/worktrees/<repo>/<task>`。每个任务有自己的锁；`active.json` 只是省略 `--task` 时的默认指针。
+worktree 默认在 `~/.local/state/codeflow/worktrees/<repo>/<task>`。每个任务有自己的锁；`active.json` 只是省略 `--task` 时的默认指针。
 
-## 安全模型
+## 更多细节
 
-- **信任必须显式。** `init` 从不执行门禁。`trust` 展示每条命令，并把批准绑定到精确的 config hash。state 和 trust 在项目根目录；被 git 跟踪的 `.codeflow/state` 会被拒绝。task 分支改 config 需要单独批准，配置一变证据就失效。
-- **证据基于树。** rebase 可能改变 commit ID；只有 tree hash、config hash、gate set 和分支全部匹配，并且工作区干净时，证据才可复用。验证不会回退到主 checkout。
-- **没有证据不能开 PR。** `pr` 需要位于 `task.branch` 的 task worktree、通过且未过期的证据、干净的工作区、新鲜的设计/计划批准、hash 匹配的已批准自审，以及等于已验证 HEAD 的 PR head。`--no-push` 只渲染 body。rebase 之后可以在 `verified` 状态重跑 `verify` 刷新证据。
-- **没有合并。** 不存在 merge 命令；skill 明确禁止 `gh pr merge`。
-- **没有假绿。** 没有 checks 的仓库报告 `none`，绝不报告 success。
-- **不能强推未合并的 PR。** `finish --force` 只绕过脏工作树；`gh` 显示 PR 还开着时，`--confirm` 或 `--force` 都会被拒绝；`gh` 认证或网络失败会阻塞，不会当成“无法检测合并”。
-- **不许弱化门禁。** skill 禁止为了让门禁通过而改测试、加 skip，或加 `@ts-ignore`、`@ts-expect-error`、`eslint-disable`、`biome-ignore`、`as any`。
-- **不存 token。** GitHub 认证归 `gh` 管，codeflow 不保存任何凭证。
-- **日志只在本机。** 门禁日志可能包含项目工具打印出的敏感信息，永远不会被上传。
+设计文档在 [`docs/`](docs/)：
 
-## 仓库结构
-
-```text
-bin/codeflow              可执行入口
-src/                      确定性的 CLI 模块
-commands/                 Claude Code slash commands
-skills/codeflow/          流程策略和红线
-hooks/                    SessionStart 状态注入
-test/                     node:test 测试、fake gate、fake gh
-docs/                     目标、架构、契约、设计
-.github/workflows/ci.yml  Node 20/22 测试和语法检查
-```
-
-## 设计文档
-
-- [`docs/goal-and-requirements.md`](docs/goal-and-requirements.md) — 产品目标、人审边界、非目标、成功指标。
-- [`docs/architecture.md`](docs/architecture.md) — 拓扑、编号决策、不变量、信任、证据、安全。
-- [`docs/contracts.md`](docs/contracts.md) — JSON wire 和所有产物 schema。
-- [`docs/DESIGN.md`](docs/DESIGN.md) — 整合后的设计与实现顺序。
+- [`goal-and-requirements.md`](docs/goal-and-requirements.md)：codeflow 是什么、不是什么。
+- [`architecture.md`](docs/architecture.md)：状态模型背后的决策和不变量。
+- [`contracts.md`](docs/contracts.md)：JSON 形状和错误码。
+- [`DESIGN.md`](docs/DESIGN.md)：整合后的设计与实现顺序。
 
 ## 开发
 
@@ -305,23 +256,19 @@ npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```
 
-CI 在 Node 20 和 22 上运行 `npm test` 和 `npm run check`。
+CI 在 Node 20 和 22 上跑 `npm test` 和 `npm run check`。测试不联网；真实 GitHub 路径用私有仓库做过手动 smoke。
 
 已知限制：
 
-- 测试不调用真实 GitHub；真实 PR 路径需要手动 smoke。
-- 没有截图自动化；PR 描述里会留显式占位符。
+- 没有截图自动化；PR body 会留占位符。
 - 没有 MCP adapter、issue tracker 同步、多仓库编排、Web UI 或任务 GC。
-- Windows 原生行为还没有作为 CI 门禁。
+- 目前只有 schema v1；迁移会等第一次版本升级时再做。
+- Windows 原生行为还没有作为 CI gate。
+- CLI 会检查 PR 状态，但不强制独立 reviewer；那仍然取决于你的仓库设置。
 
 ## 贡献
 
-- **微小改动**——文档、README、typo、注释、格式、LICENSE、小范围非行为配置——可以直接提交到 `main`，不需要 PR。
-- **行为、契约、依赖、安全、CI 和发布相关改动**——仍然走聚焦的 PR，并完成下面的验证。
-- 一个改动只解决一个问题。
-- 运行 `npm test`、`npm run check` 和 `claude plugin validate .`。
-- 不要加 suppression、弱化测试、跳过人工闸。
-- 用户可见的 UI 改动请附 before/after 截图。
+文档、typo、注释、格式、LICENSE、小范围非行为配置，可以直接提交到 `main`。行为、契约、依赖、安全、CI 和发布相关改动，走一个聚焦的 PR。两种都请先跑 `npm test`、`npm run check` 和 `claude plugin validate .`。不要为了让改动通过而弱化测试或跳过人工闸。
 
 ## 许可证
 
