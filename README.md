@@ -312,10 +312,9 @@ Known limits:
 
 ## Contributing
 
-Tiny things — docs, typos, comments, formatting, license, small config changes —
-can go straight to `main`. Behavior, contracts, dependencies, security, CI, and
-release changes should go through a focused PR. Run `npm test`, `npm run check`,
-and `claude plugin validate .` before either. Don't weaken a test or skip a human
+`main` is protected. Every change goes through a pull request and the Node 20/22
+checks; docs-only PRs are fine and can be small. Run `npm test`, `npm run check`, and
+`claude plugin validate .` before opening the PR. Don't weaken a test or skip a human
 gate to get a change through.
 
 ## License

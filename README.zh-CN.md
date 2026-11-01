@@ -268,7 +268,7 @@ CI 在 Node 20 和 22 上跑 `npm test` 和 `npm run check`。测试不联网；
 
 ## 贡献
 
-文档、typo、注释、格式、LICENSE、小范围非行为配置，可以直接提交到 `main`。行为、契约、依赖、安全、CI 和发布相关改动，走一个聚焦的 PR。两种都请先跑 `npm test`、`npm run check` 和 `claude plugin validate .`。不要为了让改动通过而弱化测试或跳过人工闸。
+`main` 已开启分支保护。所有改动都通过 PR，并跑 Node 20/22 的检查；文档类 PR 可以很小。开 PR 前请跑 `npm test`、`npm run check` 和 `claude plugin validate .`。不要为了让改动通过而弱化测试或跳过人工闸。
 
 ## 许可证
 
