@@ -86,7 +86,7 @@ The smallest useful build:
 11. **Watch CI.** Read-only snapshot or wait mode; never merge.
 12. **Collect review comments.** Read-only threads, file/line, author, and resolution
     state, written to task artifacts. No replies and no code changes.
-13. **Operate the task.** `status`, `resume`, `finish`, `doctor`, and an append-only
+13. **Operate the task.** `status`, `resume`, `finish`, `abandon`, `doctor`, and an append-only
     event log.
 
 ## The human boundary

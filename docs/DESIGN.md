@@ -103,7 +103,8 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
 | `codeflow comments` | `/codeflow:comments` | Read-only review threads |
 | `codeflow status` | `/codeflow:status` | Human or `--json` status; `--brief` for hooks |
 | `codeflow resume` | `/codeflow:resume` | Resume a blocked task |
-| `codeflow finish` | `/codeflow:finish` | Verify the merge, then remove the worktree |
+| `codeflow finish` | `/codeflow:finish` | Verify the merge, then remove the worktree; requires an open or merged PR |
+| `codeflow abandon` | `/codeflow:abandon` | Discard a task that will not ship |
 | `codeflow doctor` | `/codeflow:doctor` | Environment and state diagnostics |
 
 All commands support `--json` with the envelope in [`contracts.md`](contracts.md).
