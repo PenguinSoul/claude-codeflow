@@ -95,7 +95,7 @@ created → designed → planned → active → verified → pr_open → merged 
 - **PR 模板保真。** 保留仓库的 `PULL_REQUEST_TEMPLATE.md`；只有证据能证明的 checklist 项才会打勾；模板没有 `Review attention` 时自动追加。
 - **push 前先 rebase。** `pr` 会 fetch base、rebase 任务分支，重写后用 `--force-with-lease` 推送。冲突会把任务置为 blocked；树变化会让证据失效，必须重新验证。
 - **实时合并检测。** 有 `gh` 时，`finish` 以真实 PR 状态为准。PR 还开着时，即使 `--confirm` 或 `--force` 也会拒绝；`--confirm` 只在无法检测合并时作为替代。
-- **GitHub 可选。** 有 `gh` 时，`pr` 创建或更新 PR，`watch` 读 checks，`comments` 读 review 线程；没有 `gh` 时，`pr` 推分支并打印 compare URL。
+- **GitHub 可选。** 有 `gh` 时，`pr` 创建或更新 PR，`watch` 读 checks，`comments` 读 review 线程及解决状态；没有 `gh` 时，`pr` 推分支并打印 compare URL。
 - **没有隐藏运行时。** 零运行时依赖，无构建步骤，纯 Node ESM。
 
 ## 环境要求
@@ -209,10 +209,11 @@ codeflow finish --confirm
 | `self-review` | 生成自审包 | `--scope-drift`、`--closest-look` |
 | `pr` | 渲染 PR 描述、rebase 到 base 并创建/更新 PR；`--no-push` 只渲染 | `--no-push`、`--dry-run` |
 | `watch` | 只读查看 PR checks | `--wait`、`--timeout <s>`、`--interval <ms>` |
-| `comments` | 只读收集 review 评论，不改代码 | — |
+| `comments` | 只读收集 review 评论和解决状态，不改代码 | — |
 | `status` | 查看当前任务和下一步 | `--brief`、`--task` |
 | `resume` | 清除 blocked 状态 | `--task` |
-| `finish` | 有 `gh` 时先验证合并，再移除工作树 | `--confirm`、`--delete-branch`、`--force` |
+| `finish` | 有 `gh` 时先验证合并，再移除工作树；要求 PR 已开或已合并 | `--confirm`、`--delete-branch`、`--force` |
+| `abandon` | 丢弃不会交付的任务；拒绝已开或已合并的 PR | `--confirm`、`--delete-branch`、`--force` |
 | `doctor` | 检查环境和配置 | — |
 
 全局选项：`--json`、`--task <id>`、`--help`、`--version`。
@@ -299,7 +300,7 @@ docs/                     目标、架构、契约、设计
 ## 开发
 
 ```bash
-npm test                  # 112 个测试：临时仓库、fake gate、fake gh
+npm test                  # 113 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```

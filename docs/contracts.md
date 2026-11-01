@@ -717,11 +717,17 @@ repository reported no checks; it is never success. Unknown conclusions are pend
 ```json
 {
   "threads": 3,
-  "path": ".codeflow/state/tasks/2026-10-26-fix-login/COMMENTS.md",
+  "reviews": 2,
+  "resolutionAvailable": true,
   "resolved": 1,
-  "unresolved": 2
+  "unresolved": 2,
+  "path": ".codeflow/state/tasks/2026-10-26-fix-login/COMMENTS.md"
 }
 ```
+
+Thread resolution comes from the GitHub GraphQL `reviewThreads` query. If that query
+is unavailable, `resolutionAvailable` is `false` and `resolved`/`unresolved` are
+`null`; the command does not guess that every thread is open.
 
 ### `finish`
 
@@ -735,12 +741,29 @@ repository reported no checks; it is never success. Unknown conclusions are pend
 }
 ```
 
-`mergeConfirmedBy` is `gh`, `status`, or `confirm`. When `gh` is available and a
-GitHub PR is recorded, `finish` trusts the live PR state: an open PR is refused even
-with `--confirm` or `--force`. `--confirm` only substitutes for merge detection when
-it is unavailable (no `gh`, no GitHub PR, or a compare-mode fallback). If `gh` is
-installed and a PR is recorded but the state cannot be read (auth or network), `finish`
-fails with `E_GH_AUTH`; it does not treat that failure as permission to confirm.
+`mergeConfirmedBy` is `gh`, `status`, or `confirm`. `finish` only accepts a task whose
+status is `pr_open` or `merged`; a task that will not ship uses `abandon`. When `gh` is
+available and a GitHub PR is recorded, `finish` trusts the live PR state: an open PR is
+refused even with `--confirm` or `--force`. `--confirm` only substitutes for merge
+detection when it is unavailable (no `gh`, no GitHub PR, or a compare-mode fallback).
+If `gh` is installed and a PR is recorded but the state cannot be read (auth or
+network), `finish` fails with `E_GH_AUTH`; it does not treat that failure as permission
+to confirm.
+
+### `abandon`
+
+```json
+{
+  "taskId": "2026-10-26-spike",
+  "removedWorktree": true,
+  "deletedBranch": false,
+  "status": "abandoned"
+}
+```
+
+`abandon` requires `--confirm`, refuses `pr_open`/`merged`/`done`, removes the worktree
+(clean or `--force`), optionally deletes the local branch, and marks the task
+`abandoned`. It never touches the base branch.
 
 ### `resume`
 

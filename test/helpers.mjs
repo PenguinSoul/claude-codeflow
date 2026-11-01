@@ -91,7 +91,33 @@ export function fakeGhEnv(t, options = {}) {
     prState = "OPEN",
     checks = ["SUCCESS", "PENDING"],
     failPrView = false,
+    threads = [],
   } = options;
+  const graph = {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: threads.map((thread, index) => ({
+              id: thread.id ?? `thread-${index + 1}`,
+              isResolved: Boolean(thread.resolved),
+              isOutdated: Boolean(thread.outdated),
+              path: thread.path ?? null,
+              line: thread.line ?? null,
+              comments: {
+                nodes: (thread.comments ?? []).map((comment) => ({
+                  author: { login: comment.author ?? "reviewer" },
+                  body: comment.body ?? "",
+                  createdAt: comment.createdAt ?? null,
+                })),
+              },
+            })),
+          },
+        },
+      },
+    },
+  };
+  const graphJson = JSON.stringify(graph);
   const sequence = checks.length > 0 ? checks : ["SUCCESS"];
   const cases = sequence
     .map(
@@ -128,6 +154,12 @@ ${cases}
   exit 0
 fi
 if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  cat <<'JSON'
+${graphJson}
+JSON
+  exit 0
+fi
 if [ "$1" = "api" ]; then echo '[]'; exit 0; fi
 echo "unexpected: $*" >&2
 exit 1

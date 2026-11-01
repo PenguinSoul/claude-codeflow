@@ -125,6 +125,7 @@ const COMMANDS = new Set([
   "start",
   "resume",
   "finish",
+  "abandon",
   "self-review",
   "pr",
   "watch",
@@ -149,6 +150,7 @@ Commands:
   start      Create the task branch and worktree
   resume     Clear a blocked state and continue
   finish     Remove the worktree after merge
+  abandon    Discard a task that will not ship
   self-review Build the self-review packet
   pr         Render the PR body and create/update the PR
   watch      Read the PR checks (read-only)
@@ -173,8 +175,8 @@ Options:
   --status <s> Step status: pending, in_progress, done, blocked (plan step)
   --summary <s> Step summary (plan step)
   --result <s> Step result, e.g. "npm test -> pass" (plan step)
-  --confirm    Confirm the merge (finish only)
-  --delete-branch Delete the task branch (finish only)
+  --confirm    Confirm a merge or abandon (finish/abandon)
+  --delete-branch Delete the task branch (finish/abandon)
   --force-unlock Remove a stale task or project lock
   --no-push    Render the PR body only; do not push or create a PR (pr only)
   --scope-drift <s> Record scope drift (self-review, repeatable)
@@ -1223,6 +1225,106 @@ function mergeDetection(repo, task, paths, env) {
   }
 }
 
+function abandonCommand(repo, config, flags) {
+  const paths = statePaths(repo.mainRoot, repo.projectConfig);
+  const active = readActive(paths);
+  const taskId = flags.task ?? active?.taskId;
+  if (!taskId) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "no active task",
+      null,
+      "Run `codeflow new` or pass --task.",
+    );
+  }
+  const task = readTask(paths, taskId);
+  if (!task) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task "${taskId}" was not found`,
+      { taskId },
+    );
+  }
+  if (["pr_open", "merged", "done"].includes(task.status)) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; abandon is only for tasks that will not ship`,
+      { status: task.status },
+      "Use `codeflow finish` for a task with a pull request.",
+    );
+  }
+
+  if (flags.dryRun) {
+    return {
+      data: {
+        taskId,
+        worktree: task.worktree,
+        wouldRemove: Boolean(task.worktree && fileExists(task.worktree)),
+        dryRun: true,
+      },
+      taskId,
+    };
+  }
+  if (!flags.confirm) {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      "abandon requires explicit confirmation",
+      { status: task.status },
+      "Re-run with `codeflow abandon --confirm`.",
+    );
+  }
+
+  acquireLock(paths, task.id, {
+    command: "abandon",
+    force: flags.forceUnlock,
+  });
+  try {
+    let removedWorktree = false;
+    if (task.worktree && fileExists(task.worktree)) {
+      if (!isClean(task.worktree) && !flags.force) {
+        throw new CodedError(
+          ERROR_CODES.DIRTY_TREE,
+          "the worktree has uncommitted changes",
+          { worktree: task.worktree },
+          "Commit or discard them, or pass --force.",
+        );
+      }
+      removeWorktree(repo.mainRoot, task.worktree, { force: flags.force });
+      removedWorktree = true;
+    }
+
+    let deletedBranch = false;
+    if (flags.deleteBranch && task.branch) {
+      const result = git(["branch", "-D", task.branch], {
+        cwd: repo.mainRoot,
+        allowFail: true,
+      });
+      deletedBranch = result !== null;
+    }
+
+    task.status = "abandoned";
+    task.blocked = null;
+    const event = appendEvent(paths, task.id, "task.abandoned", actor(repo), {
+      removedWorktree,
+      deletedBranch,
+    });
+    task.lastEventHash = event.hash;
+    writeTask(paths, task);
+
+    return {
+      data: {
+        taskId,
+        removedWorktree,
+        deletedBranch,
+        status: "abandoned",
+      },
+      taskId,
+    };
+  } finally {
+    releaseLock(paths, task.id);
+  }
+}
+
 function finishCommand(repo, config, flags, env) {
   const paths = statePaths(repo.mainRoot, repo.projectConfig);
   const active = readActive(paths);
@@ -1241,6 +1343,14 @@ function finishCommand(repo, config, flags, env) {
       ERROR_CODES.STATE_CONFLICT,
       `task "${taskId}" was not found`,
       { taskId },
+    );
+  }
+  if (task.status !== "pr_open" && task.status !== "merged") {
+    throw new CodedError(
+      ERROR_CODES.STATE_CONFLICT,
+      `task is ${task.status}; finish requires an open or merged pull request`,
+      { status: task.status },
+      "Use `codeflow abandon --confirm` to discard a task that will not ship.",
     );
   }
 
@@ -2005,6 +2115,16 @@ function commentsCommand(repo, config, flags, env) {
     "",
     `PR: #${pr.number}`,
     "",
+    "## Review threads",
+    ...(data.resolutionAvailable
+      ? data.threads.length === 0
+        ? ["- None."]
+        : data.threads.map((thread) => {
+            const first = thread.comments[0];
+            return `- [${thread.isResolved ? "resolved" : "open"}] ${first?.author ?? "unknown"} at \`${thread.path ?? "?"}:${thread.line ?? "?"}\`: ${first?.body || "(no body)"}`;
+          })
+      : ["- Resolution state unavailable; showing inline comments only."]),
+    "",
     "## Reviews",
     ...(data.reviews.length === 0
       ? ["- None."]
@@ -2036,11 +2156,14 @@ function commentsCommand(repo, config, flags, env) {
   }
   return {
     data: {
-      threads: data.comments.length,
+      threads: data.resolutionAvailable
+        ? data.threads.length
+        : data.comments.length,
       reviews: data.reviews.length,
       path: repoRelative(repo.mainRoot, taskFile(paths, task.id, "COMMENTS.md")),
-      resolved: 0,
-      unresolved: data.comments.length,
+      resolutionAvailable: data.resolutionAvailable,
+      resolved: data.resolved,
+      unresolved: data.unresolved,
     },
     taskId,
   };
@@ -2306,6 +2429,10 @@ export async function run(argv, io = {}) {
       }
       case "finish": {
         result = finishCommand(repo, config, flags, env);
+        break;
+      }
+      case "abandon": {
+        result = abandonCommand(repo, config, flags);
         break;
       }
       case "self-review": {

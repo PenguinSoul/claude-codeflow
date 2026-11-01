@@ -75,7 +75,8 @@ These are hard stops, not advice.
   branch.
 - **Never finish an unmerged task.** When `gh` reports the PR open, `finish`
   refuses even with `--confirm` or `--force`. `--force` only bypasses a dirty
-  worktree; a `gh` failure is blocked, not confirmation.
+  worktree; a `gh` failure is blocked, not confirmation. Use `abandon` only when the
+  human explicitly decides the task will not ship, never to escape a gate or review.
 - **Never guess at a conflict.** A rebase conflict, ambiguous requirement, or
   security concern becomes `blocked`; ask the human.
 - **Never hide a failure.** Report the error code, the failing gate, and the
