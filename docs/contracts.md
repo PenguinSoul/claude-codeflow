@@ -715,11 +715,17 @@ repository reported no checks; it is never success. Unknown conclusions are pend
 ```json
 {
   "threads": 3,
-  "path": ".codeflow/state/tasks/2026-10-26-fix-login/COMMENTS.md",
+  "reviews": 2,
+  "resolutionAvailable": true,
   "resolved": 1,
-  "unresolved": 2
+  "unresolved": 2,
+  "path": ".codeflow/state/tasks/2026-10-26-fix-login/COMMENTS.md"
 }
 ```
+
+Thread resolution comes from the GitHub GraphQL `reviewThreads` query. If that query
+is unavailable, `resolutionAvailable` is `false` and `resolved`/`unresolved` are
+`null`; the command does not guess that every thread is open.
 
 ### `finish`
 

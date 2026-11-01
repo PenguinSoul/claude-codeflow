@@ -98,6 +98,8 @@ test("findOpenPr, createOrUpdatePr, checks, and comments use gh", async (t) => {
 
   const comments = readComments(dir, 7, env);
   assert.equal(comments.repo, "o/r");
+  assert.equal(comments.resolutionAvailable, false);
+  assert.equal(comments.resolved, null);
   assert.deepEqual(comments.comments, []);
   assert.deepEqual(comments.reviews, []);
 });
