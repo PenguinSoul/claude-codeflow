@@ -276,6 +276,10 @@ Ambiguous state, rebase conflicts, missing `gh` auth, lock contention, and repea
 gate failures move the task to `blocked` with a reason and a resume path. Conflicts
 are never resolved by guessing.
 
+A recorded PR is re-read from `gh` before cleanup, even when the local status says
+`merged`; the status only counts when no observation is possible. Delivery
+artifacts are created by `pr`, never out of band.
+
 **Why:** an automated guess at a conflict is exactly the kind of change a human must
 review.
 

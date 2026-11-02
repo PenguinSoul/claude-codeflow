@@ -1399,10 +1399,19 @@ function finishCommand(repo, config, flags, env) {
     );
   }
 
+  // A recorded PR is always checked when gh can answer. The local status is a
+  // hint about where the task stands, never proof that the work merged: a task
+  // marked "merged" by some future path must not be able to authorize cleanup
+  // on its own.
+  const recordedPr = readPr(paths, task.id);
   const detection =
-    task.status === "pr_open"
+    task.status === "pr_open" || recordedPr
       ? mergeDetection(repo, task, paths, env)
-      : { available: false, merged: false, reason: `task is ${task.status}` };
+      : {
+          available: false,
+          merged: false,
+          reason: `no pull request is recorded for a ${task.status} task`,
+        };
   if (detection.error) {
     throw new CodedError(
       ERROR_CODES.GH_AUTH,
@@ -1411,7 +1420,7 @@ function finishCommand(repo, config, flags, env) {
       "Fix `gh auth status` or the network, then retry. Do not use --confirm to bypass a failed merge check.",
     );
   }
-  const confirmedByStatus = task.status === "merged";
+  const confirmedByStatus = task.status === "merged" && !detection.available;
   const confirmedByGh = detection.available && detection.merged;
   const confirmedByHuman = flags.confirm && !detection.available;
   const mergeConfirmed =
@@ -2116,10 +2125,12 @@ async function watchCommand(repo, config, flags, env) {
   try {
     pr = readPr(paths, task.id) ?? pr;
     pr.checks = checks;
+    pr.state = String(status.state ?? "").toLowerCase() || pr.state;
+    pr.observedAt = nowIso();
     pr.mergeStateStatus = status.mergeStateStatus;
     pr.reviewDecision = status.reviewDecision;
     pr.headSha = status.headSha;
-    pr.lastReadAt = nowIso();
+    pr.lastReadAt = pr.observedAt;
     writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
   } finally {
     releaseLock(paths, task.id);
