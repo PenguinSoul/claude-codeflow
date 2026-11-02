@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-[![CI](https://github.com/PenguinSoul/codeflow/actions/workflows/ci.yml/badge.svg)](https://github.com/PenguinSoul/codeflow/actions/workflows/ci.yml)
+[![CI](https://github.com/PenguinSoul/claude-codeflow/actions/workflows/ci.yml/badge.svg)](https://github.com/PenguinSoul/claude-codeflow/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
@@ -80,15 +80,15 @@ done`。遇到 rebase 冲突、gate 失败、worktree 丢失之类的问题，�
 ## 安装
 
 ```bash
-git clone https://github.com/PenguinSoul/codeflow.git
-cd codeflow
+git clone https://github.com/PenguinSoul/claude-codeflow.git
+cd claude-codeflow
 claude --plugin-dir .
 ```
 
 或者从仓库作为 marketplace 安装：
 
 ```text
-/plugin install codeflow --marketplace PenguinSoul/codeflow
+/plugin install codeflow --marketplace PenguinSoul/claude-codeflow
 ```
 
 实测 Claude Code 2.1.278 不会把插件的 `bin/` 加入 Bash 工具的 `PATH`，所以命令统一通过
