@@ -117,8 +117,17 @@ Or install from the repository as a marketplace:
 /plugin install codeflow --marketplace PenguinSoul/codeflow
 ```
 
-While the plugin is enabled, its `bin/` directory is on the Bash tool's `PATH`.
-You can also run `./bin/codeflow` from the checkout.
+Claude Code does not put a plugin's `bin/` directory on the Bash tool's `PATH`
+(tested on 2.1.278). Add it explicitly, or call the executable by absolute path:
+
+```bash
+# Add the CLI to PATH for this shell.
+export PATH="/path/to/codeflow/bin:$PATH"
+codeflow --version
+
+# Or call it by absolute path.
+/path/to/codeflow/bin/codeflow --version
+```
 
 ## A quick run
 
@@ -278,6 +287,10 @@ Local, excluded through `.git/info/exclude`:
 Worktrees live under `~/.local/state/codeflow/worktrees/<repo>/<task>` by
 default. Each task has its own lock; `active.json` is only the default pointer
 for commands that omit `--task`.
+
+Set `worktreeRoot` to a path inside the repository, such as `.worktrees`, so the
+main checkout and its task worktrees share a filesystem and the relative path
+resolves against the main repository root; add that directory to `.gitignore`.
 
 ## More detail
 
