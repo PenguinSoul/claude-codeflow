@@ -286,6 +286,39 @@ test("finish trusts gh over --confirm and --force", async (t) => {
   assert.equal(brief.out, "");
 });
 
+test("finish checks gh even when the task is marked merged", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+  });
+
+  // Nothing writes "merged" yet; a future adoption path would. Prove the status
+  // alone can never authorize deleting the worktree.
+  const taskFile = join(
+    dir,
+    ".codeflow/state/tasks",
+    delivered.taskId,
+    "task.json",
+  );
+  const task = JSON.parse(readFileSync(taskFile, "utf8"));
+  task.status = "merged";
+  writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+
+  const openEnv = fakeGhEnv(t, { prState: "OPEN", checks: ["SUCCESS"] });
+  const refused = await invoke(["finish", "--json"], dir, openEnv);
+  assert.equal(refused.code, 3);
+  assert.equal(refused.json.error.code, "E_STATE_CONFLICT");
+  assert.equal(refused.json.error.details.prState, "OPEN");
+  assert.equal(existsSync(delivered.worktree), true);
+
+  const mergedEnv = fakeGhEnv(t, { prState: "MERGED", checks: ["SUCCESS"] });
+  const finished = await invoke(["finish", "--json"], dir, mergedEnv);
+  assert.equal(finished.code, 0, finished.err || finished.out);
+  assert.equal(finished.json.data.mergeConfirmedBy, "gh");
+  assert.equal(existsSync(delivered.worktree), false);
+});
+
 test("finish keeps a pointer that already names another task", async (t) => {
   const { dir } = repoWithRemote(t);
   const delivered = await deliver(dir, t, {
