@@ -148,10 +148,26 @@ test("init, status, and doctor form a working slice", async (t) => {
   assert.equal(brief.out, "");
 });
 
+function rewriteConfig(dir, mutate) {
+  const file = join(dir, ".codeflow/config.json");
+  const config = JSON.parse(readFileSync(file, "utf8"));
+  mutate(config);
+  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+}
+
 test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
   await invoke(["init", "--json"], dir);
+
+  // The default worktreeRoot lives under $HOME. Assert against a root this test
+  // owns, so a read-only or missing home cannot fail it for the wrong reason.
+  const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-doctor-wt-"));
+  t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+  rewriteConfig(dir, (config) => {
+    config.worktreeRoot = worktreeRoot;
+  });
+
   const env = fakeGhEnv(t, { checks: ["SUCCESS"] });
 
   const result = await invoke(["doctor", "--json"], dir, env);
