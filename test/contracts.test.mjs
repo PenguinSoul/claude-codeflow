@@ -6,6 +6,7 @@ import {
   EXIT,
   exitFor,
   fail,
+  failWithData,
   ok,
 } from "../src/contracts.mjs";
 
@@ -29,6 +30,29 @@ test("fail envelope carries a coded error", () => {
   assert.equal(envelope.ok, false);
   assert.equal(envelope.data, null);
   assert.equal(envelope.error.code, "E_NOT_REPO");
+});
+
+test("failWithData keeps the report on a failed command", () => {
+  const envelope = failWithData(
+    "verify",
+    {
+      code: ERROR_CODES.GATE_FAILED,
+      message: 'gate "test" exited 1',
+      details: { gate: "test", exitCode: 1 },
+      hint: "Fix it.",
+    },
+    { result: "fail" },
+    { repoRoot: "/repo", taskId: "2026-10-26-fix-login" },
+    [{ code: "W_ATTENTION", message: "attention items recorded: skip" }],
+  );
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.data.result, "fail");
+  assert.equal(envelope.error.code, "E_GATE_FAILED");
+  assert.equal(envelope.error.details.gate, "test");
+  assert.equal(envelope.meta.taskId, "2026-10-26-fix-login");
+  assert.equal(envelope.warnings.length, 1);
+  assert.equal(exitFor(envelope.error.code), EXIT.GATE);
 });
 
 test("CodedError serializes and maps to an exit code", () => {

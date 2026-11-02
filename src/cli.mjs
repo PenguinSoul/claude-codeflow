@@ -6,6 +6,7 @@ import {
   EXIT,
   exitFor,
   fail,
+  failWithData,
   ok,
 } from "./contracts.mjs";
 import {
@@ -76,6 +77,7 @@ import {
 import {
   acquireLock,
   acquireProjectLock,
+  clearActive,
   ensureState,
   readActive,
   readPr,
@@ -396,7 +398,9 @@ function emit(envelope, flags, out, err) {
   }
   if (!envelope.ok) {
     err.write(`${renderError(envelope)}\n`);
-    return;
+    if (envelope.data === null) {
+      return;
+    }
   }
   if (flags.brief && envelope.command === "status") {
     const brief = renderBrief(envelope.data);
@@ -941,14 +945,10 @@ function verifyCommand(repo, config, flags) {
   });
   writeEvidence(paths, task, evidence);
 
-  const noted = failedAttention(attention, [
-    "test",
-    "skip",
-    "suppression",
-    "config",
-    "lockfile",
-    "large-diff",
-  ]);
+  // Only changes that can weaken verification are worth a warning. Test-file
+  // edits and diff size are normal work: they stay in data.attention, the
+  // evidence, and the review packet, where a reviewer reads them anyway.
+  const noted = failedAttention(attention, ["skip", "suppression"]);
 
   let next;
   if (result === "pass") {
@@ -989,6 +989,47 @@ function verifyCommand(repo, config, flags) {
     });
   }
 
+  const evidencePath = repoRelative(
+    repo.mainRoot,
+    taskFile(paths, task.id, "evidence.json"),
+  );
+  const failedGate = run.results.find(
+    (gate) => gate.required && (gate.timedOut || gate.exitCode !== 0),
+  );
+  const failure =
+    result === "pass"
+      ? null
+      : {
+          code: failedGate?.timedOut
+            ? ERROR_CODES.GATE_TIMEOUT
+            : ERROR_CODES.GATE_FAILED,
+          message:
+            failed.length > 0
+              ? `attention items failed the gate: ${failed.join(", ")}`
+              : failedGate
+                ? `gate "${failedGate.name}" ${failedGate.timedOut ? "timed out" : `exited ${failedGate.exitCode}`}`
+                : "the gates did not pass",
+          details: {
+            result,
+            evidencePath,
+            gate: failedGate?.name ?? null,
+            attention: failed,
+            gates: run.results.map((gate) => ({
+              name: gate.name,
+              exitCode: gate.exitCode,
+              timedOut: gate.timedOut,
+              required: gate.required,
+              logPath: gate.logPath
+                ? repoRelative(repo.mainRoot, gate.logPath)
+                : null,
+            })),
+          },
+          hint:
+            failed.length > 0
+              ? "Review the attention items, fix them, then run `codeflow resume`."
+              : "Fix the failing gate, then run `codeflow verify` again.",
+        };
+
   return {
     data: {
       result,
@@ -1005,14 +1046,12 @@ function verifyCommand(repo, config, flags) {
         flaky: gate.flaky,
       })),
       attention,
-      evidencePath: repoRelative(
-        repo.mainRoot,
-        taskFile(paths, task.id, "evidence.json"),
-      ),
+      evidencePath,
       next,
     },
     taskId,
     warnings: resultWarnings,
+    failure,
     exitCode: result === "pass" ? EXIT.OK : EXIT.GATE,
   };
 }
@@ -1307,9 +1346,11 @@ function abandonCommand(repo, config, flags) {
 
     task.status = "abandoned";
     task.blocked = null;
+    const activeCleared = clearActive(paths, task.id);
     const event = appendEvent(paths, task.id, "task.abandoned", actor(repo), {
       removedWorktree,
       deletedBranch,
+      activeCleared,
     });
     task.lastEventHash = event.hash;
     writeTask(paths, task);
@@ -1319,6 +1360,7 @@ function abandonCommand(repo, config, flags) {
         taskId,
         removedWorktree,
         deletedBranch,
+        activeCleared,
         status: "abandoned",
       },
       taskId,
@@ -1453,10 +1495,12 @@ function finishCommand(repo, config, flags, env) {
 
     task.status = "done";
     task.blocked = null;
+    const activeCleared = clearActive(paths, task.id);
     const event = appendEvent(paths, task.id, "task.finished", actor(repo), {
       removedWorktree,
       deletedBranch,
       mergeConfirmedBy,
+      activeCleared,
     });
     task.lastEventHash = event.hash;
     writeTask(paths, task);
@@ -1467,6 +1511,7 @@ function finishCommand(repo, config, flags, env) {
         removedWorktree,
         deletedBranch,
         mergeConfirmedBy,
+        activeCleared,
         status: "done",
       },
       taskId,
@@ -1612,7 +1657,7 @@ function selfReviewCommand(repo, config, flags) {
     },
     taskId,
     warnings:
-      counts.skips + counts.suppressions + counts.testFiles > 0
+      counts.skips + counts.suppressions > 0
         ? [
             {
               code: "W_ATTENTION",
@@ -2502,15 +2547,19 @@ export async function run(argv, io = {}) {
         );
     }
 
-    const envelope = ok(
-      command,
-      result.data,
-      {
-        repoRoot: repo.mainRoot,
-        taskId: result.taskId ?? flags.task ?? null,
-      },
-      result.warnings ?? [],
-    );
+    const resultMeta = {
+      repoRoot: repo.mainRoot,
+      taskId: result.taskId ?? flags.task ?? null,
+    };
+    const envelope = result.failure
+      ? failWithData(
+          command,
+          result.failure,
+          result.data ?? null,
+          resultMeta,
+          result.warnings ?? [],
+        )
+      : ok(command, result.data, resultMeta, result.warnings ?? []);
     emit(envelope, flags, out, err);
     return result.exitCode ?? EXIT.OK;
   } catch (error) {

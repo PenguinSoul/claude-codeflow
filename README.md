@@ -286,7 +286,8 @@ Local, excluded through `.git/info/exclude`:
 
 Worktrees live under `~/.local/state/codeflow/worktrees/<repo>/<task>` by
 default. Each task has its own lock; `active.json` is only the default pointer
-for commands that omit `--task`.
+for commands that omit `--task`, and `finish` or `abandon` drops it once the
+task is over.
 
 Set `worktreeRoot` to a path inside the repository, such as `.worktrees`, so the
 main checkout and its task worktrees share a filesystem and the relative path

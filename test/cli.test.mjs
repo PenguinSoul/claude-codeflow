@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -338,6 +339,7 @@ async function setupActiveTask(dir, command, options = {}, t = null) {
   }
   const {
     failOn = [],
+    attention = {},
     trust = true,
   } = options;
 
@@ -357,6 +359,7 @@ async function setupActiveTask(dir, command, options = {}, t = null) {
     },
   ];
   config.attention.failOn = failOn;
+  Object.assign(config.attention, attention);
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
   execFileSync("git", ["add", ".codeflow/config.json"], { cwd: dir });
   execFileSync("git", ["commit", "-m", "test: commit codeflow config"], {
@@ -440,11 +443,62 @@ test("a failing required gate exits 1 and records a failed evidence file", async
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 1);
+  assert.equal(result.json.ok, false);
+  assert.equal(result.json.error.code, "E_GATE_FAILED");
+  assert.match(result.json.error.message, /^gate "test" exited 1$/);
+  assert.equal(result.json.error.details.gate, "test");
   assert.equal(result.json.data.result, "fail");
   const evidence = JSON.parse(
     readFileSync(join(dir, result.json.data.evidencePath), "utf8"),
   );
   assert.equal(evidence.result, "fail");
+
+  const human = await invoke(["verify"], dir);
+  assert.equal(human.code, 1);
+  assert.match(human.err, /error: E_GATE_FAILED/);
+  assert.match(human.out, /Result: fail/);
+  assert.match(human.out, /test\s+fail/);
+});
+
+test("routine attention does not raise a warning", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const { worktree } = await setupActiveTask(
+    dir,
+    'node -e "process.exit(0)"',
+    { attention: { largeDiffFiles: 0, largeDiffLines: 0 } },
+    t,
+  );
+
+  mkdirSync(join(worktree, "test"), { recursive: true });
+  writeFileSync(join(worktree, "test", "auth.test.mjs"), "test('a', () => {});\n");
+  execFileSync("git", ["add", "-A"], { cwd: worktree });
+  execFileSync("git", ["commit", "-m", "test: add a test"], { cwd: worktree });
+
+  const routine = await invoke(["verify", "--json"], dir);
+  assert.equal(routine.code, 0, routine.err || routine.out);
+  assert.equal(routine.json.data.result, "pass");
+  const { largeDiff, testFiles } = routine.json.data.attention;
+  assert.ok(testFiles.length > 0);
+  assert.ok(largeDiff.files > largeDiff.thresholdFiles);
+  assert.equal(
+    routine.json.warnings.some((warning) => warning.code === "W_ATTENTION"),
+    false,
+  );
+
+  // A suppression weakens verification, so it has to warn.
+  writeFileSync(
+    join(worktree, "auth.ts"),
+    `// @ts-${"ignore"}\nexport const a = 1;\n`,
+  );
+  execFileSync("git", ["add", "-A"], { cwd: worktree });
+  const warned = await invoke(["verify", "--json"], dir);
+  const warning = warned.json.warnings.find(
+    (entry) => entry.code === "W_ATTENTION",
+  );
+  assert.ok(warning, warned.out || warned.err);
+  assert.match(warning.message, /suppression/);
+  assert.doesNotMatch(warning.message, /large-diff/);
 });
 
 test("attention failOn blocks the task", async (t) => {
@@ -462,6 +516,9 @@ test("attention failOn blocks the task", async (t) => {
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 1);
+  assert.equal(result.json.ok, false);
+  assert.equal(result.json.error.code, "E_GATE_FAILED");
+  assert.match(result.json.error.message, /attention items failed the gate: suppression/);
   assert.equal(result.json.data.result, "fail");
 
   const status = await invoke(["status", "--json", "--task", taskId], dir);
@@ -559,7 +616,11 @@ test("start creates a worktree and abandon removes it", async (t) => {
   assert.equal(abandoned.json.data.removedWorktree, true);
   assert.equal(existsSync(planned.worktree), false);
 
-  const done = await invoke(["status", "--json"], dir);
+  const cleared = await invoke(["status", "--json"], dir);
+  assert.equal(cleared.json.data.task, null);
+  assert.deepEqual(cleared.json.data.next, ["new"]);
+
+  const done = await invoke(["status", "--task", planned.task.id, "--json"], dir);
   assert.equal(done.json.data.task.status, "abandoned");
 });
 

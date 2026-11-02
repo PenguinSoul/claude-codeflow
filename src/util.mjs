@@ -90,7 +90,8 @@ export function truncate(text, max = 4000) {
 }
 
 export function slugify(text) {
-  const slug = String(text ?? "")
+  const source = String(text ?? "");
+  const slug = source
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[^\w\s-]/g, "")
@@ -100,7 +101,22 @@ export function slugify(text) {
     .replace(/^-|-$/g, "")
     .slice(0, 60)
     .replace(/-$/g, "");
-  return slug || "task";
+  if (slug) {
+    return slug;
+  }
+  // A title with no ASCII word characters (for example CJK) loses every
+  // character above and would collapse to the same "task" id. Keep ids ASCII
+  // and branch-safe, but derive a stable suffix from the original title so
+  // different titles stay distinguishable and repeat runs stay idempotent.
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return "task";
+  }
+  const digest = createHash("sha256")
+    .update(trimmed.normalize("NFC"))
+    .digest("hex")
+    .slice(0, 8);
+  return `t-${digest}`;
 }
 
 export function dateStamp() {

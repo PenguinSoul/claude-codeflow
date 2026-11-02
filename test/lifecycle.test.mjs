@@ -273,7 +273,69 @@ test("finish trusts gh over --confirm and --force", async (t) => {
   const finished = await invoke(["finish", "--json"], dir, mergedEnv);
   assert.equal(finished.code, 0, finished.err || finished.out);
   assert.equal(finished.json.data.mergeConfirmedBy, "gh");
+  assert.equal(finished.json.data.activeCleared, true);
   assert.equal(existsSync(delivered.worktree), false);
+
+  const activeFile = join(dir, ".codeflow/state/active.json");
+  assert.equal(existsSync(activeFile), false);
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.code, 0, status.err || status.out);
+  assert.equal(status.json.data.task, null);
+  assert.deepEqual(status.json.data.next, ["new"]);
+  const brief = await invoke(["status", "--brief"], dir);
+  assert.equal(brief.out, "");
+});
+
+test("finish keeps a pointer that already names another task", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+  });
+
+  const otherId = "2026-11-02-a-newer-task";
+  const activeFile = join(dir, ".codeflow/state/active.json");
+  writeFileSync(
+    activeFile,
+    `${JSON.stringify({ schemaVersion: 1, taskId: otherId }, null, 2)}\n`,
+  );
+
+  const mergedEnv = fakeGhEnv(t, { prState: "MERGED", checks: ["SUCCESS"] });
+  const finished = await invoke(
+    ["finish", "--task", delivered.taskId, "--json"],
+    dir,
+    mergedEnv,
+  );
+  assert.equal(finished.code, 0, finished.err || finished.out);
+  assert.equal(finished.json.data.activeCleared, false);
+
+  const active = JSON.parse(readFileSync(activeFile, "utf8"));
+  assert.equal(active.taskId, otherId);
+});
+
+test("abandon clears the active pointer", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+  const activeFile = join(dir, ".codeflow/state/active.json");
+  assert.equal(existsSync(activeFile), true);
+
+  const abandoned = await invoke(
+    ["abandon", "--confirm", "--force", "--json"],
+    dir,
+  );
+  assert.equal(abandoned.code, 0, abandoned.err || abandoned.out);
+  assert.equal(abandoned.json.data.activeCleared, true);
+  assert.equal(existsSync(activeFile), false);
+
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.json.data.task, null);
+  assert.deepEqual(status.json.data.next, ["new"]);
+  // The archived task is still reachable by id.
+  const archived = await invoke(
+    ["status", "--task", planned.taskId, "--json"],
+    dir,
+  );
+  assert.equal(archived.json.data.task.status, "abandoned");
 });
 
 test("finish keeps the PR state open when cleanup is refused", async (t) => {

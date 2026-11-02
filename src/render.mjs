@@ -15,7 +15,7 @@ export function renderError(envelope) {
 }
 
 export function render(envelope) {
-  if (!envelope.ok) {
+  if (!envelope.ok && !envelope.data) {
     return renderError(envelope);
   }
   const { command, data, warnings } = envelope;
@@ -30,6 +30,8 @@ export function render(envelope) {
         "Next: codeflow trust",
         ...renderWarnings(warnings),
       ].join("\n");
+    case "verify":
+      return renderVerify(data, warnings);
     case "status":
       return renderStatus(data, warnings);
     case "doctor":
@@ -42,6 +44,43 @@ export function render(envelope) {
     default:
       return JSON.stringify(data, null, 2);
   }
+}
+
+export function renderVerify(data, warnings = []) {
+  const lines = [
+    `Result: ${data.result} (tier ${data.tier}, kind ${data.effectiveKind})`,
+  ];
+  if (data.effectiveKind !== data.kind) {
+    lines.push(`Kind: ${data.kind} declared, ${data.effectiveKind} used`);
+  }
+  if (data.gates.length === 0) {
+    lines.push("Gates: none");
+  } else {
+    for (const gate of data.gates) {
+      const status = gate.timedOut
+        ? "timeout"
+        : gate.exitCode === 0
+          ? "pass"
+          : "fail";
+      lines.push(
+        `  ${gate.name.padEnd(12)} ${status.padEnd(8)} exit ${gate.exitCode} ${gate.durationMs}ms${gate.required ? "" : " (optional)"}${gate.flaky ? " (flaky)" : ""}`,
+      );
+    }
+  }
+  const attention = data.attention ?? {};
+  const counts = [
+    ["test files", attention.testFiles?.length ?? 0],
+    ["skips", attention.skips?.length ?? 0],
+    ["suppressions", attention.suppressions?.length ?? 0],
+    ["config changes", attention.configChanges?.length ?? 0],
+    ["lockfile changes", attention.lockfileChanges?.length ?? 0],
+  ].filter(([, count]) => count > 0);
+  if (counts.length > 0) {
+    lines.push(`Attention: ${counts.map(([label, count]) => `${count} ${label}`).join(", ")}`);
+  }
+  lines.push(`Evidence: ${data.evidencePath}`);
+  lines.push(`Next: ${data.next.length === 0 ? "(none)" : data.next.join(", ")}`);
+  return [...lines, ...renderWarnings(warnings)].join("\n");
 }
 
 export function renderStatus(data, warnings = []) {

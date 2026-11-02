@@ -34,7 +34,11 @@ the same data. Commands, tests, and the plugin shell must never parse prose.
 
 Rules:
 
-- `ok: false` implies `data: null` and a non-null `error`.
+- `ok: false` implies a non-null `error`. `data` is `null` unless the command
+  completed and produced a report that stays valid after the failure — currently
+  only `verify`, which keeps its gate report so the caller can render the failure.
+- `ok` describes the command outcome, so it agrees with the exit code: `ok: true`
+  is exit `0`, and a failed required gate is `ok: false` with exit `1`.
 - `warnings` is always an array; a warning never changes the exit code.
 - `meta.taskId` is `null` when no task is selected.
 - Unknown fields are ignored by consumers; producers may add fields within the same
@@ -538,6 +542,11 @@ as success.
 }
 ```
 
+A task id is the date plus an ASCII slug of the title. A title with no ASCII word
+characters (for example a CJK title) keeps the same shape with a stable digest instead
+of collapsing to `task`: `2026-11-02-t-9e6b521c`. The suffix is derived from the title,
+so the same title always maps to the same base id and repeats get the usual `-2`.
+
 ### `approve`
 
 ```json
@@ -618,6 +627,17 @@ uses the broader `mixed` gate set and returns `W_KIND_INFERRED`. A docs-only tas
 no configured docs gate records zero gates, passes on attention, and returns
 `W_NO_GATES`; a non-docs task with no applicable gate is `E_CONFIG`. Evidence records
 all three kinds.
+
+A failed verification is a failure envelope that keeps the report: `ok: false`,
+`error.code` is `E_GATE_FAILED` (or `E_GATE_TIMEOUT` when a required gate timed out),
+`data.result` is `"fail"`, and `data` still carries the gate table, attention, and
+`evidencePath`. The exit code is `1`. `error.details` names the failing gate, its exit
+code, the per-gate log paths, and the attention categories that failed `failOn`.
+
+`W_ATTENTION` covers the two categories that weaken verification — skipped tests and
+suppressions. Test-file changes and diff size are recorded in `data.attention`, the
+evidence, and the review packet, but they do not raise a warning; use
+`attention.failOn` to gate on them.
 
 ### `pr`
 
@@ -737,12 +757,15 @@ is unavailable, `resolutionAvailable` is `false` and `resolved`/`unresolved` are
   "removedWorktree": true,
   "deletedBranch": false,
   "mergeConfirmedBy": "gh",
+  "activeCleared": true,
   "status": "done"
 }
 ```
 
 `mergeConfirmedBy` is `gh`, `status`, or `confirm`. `finish` only accepts a task whose
-status is `pr_open` or `merged`; a task that will not ship uses `abandon`. When `gh` is
+status is `pr_open` or `merged`; a task that will not ship uses `abandon`. Both clear
+`active.json` when the pointer still names that task (`activeCleared` reports it), so
+`status` falls back to `task: null`; the archived task stays reachable with `--task`. When `gh` is
 available and a GitHub PR is recorded, `finish` trusts the live PR state: an open PR is
 refused even with `--confirm` or `--force`. `--confirm` only substitutes for merge
 detection when it is unavailable (no `gh`, no GitHub PR, or a compare-mode fallback).
@@ -757,6 +780,7 @@ to confirm.
   "taskId": "2026-10-26-spike",
   "removedWorktree": true,
   "deletedBranch": false,
+  "activeCleared": true,
   "status": "abandoned"
 }
 ```

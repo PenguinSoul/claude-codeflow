@@ -172,5 +172,10 @@ test("the built binary runs the full human-gated flow in a temporary repository"
 
   const status = runCli(["status", "--json"], dir);
   assert.equal(status.code, 0);
-  assert.equal(status.json.data.task.status, "done");
+  assert.equal(status.json.data.task, null);
+  assert.deepEqual(status.json.data.next, ["new"]);
+
+  const archived = runCli(["status", "--task", taskId, "--json"], dir);
+  assert.equal(archived.code, 0);
+  assert.equal(archived.json.data.task.status, "done");
 });
