@@ -1,4 +1,4 @@
-# codeflow
+# claude-codeflow
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -6,8 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-codeflow is a small CLI and Claude Code plugin for working with a coding agent
-without handing it the whole repository.
+claude-codeflow is a software engineering workflow plugin built for Agent First
+repositories.
 
 It takes one task from a short written spec, through a plan, an isolated
 worktree, the project's checks, a self-review, and a pull request. Claude does
@@ -33,19 +33,19 @@ repository:
 - The reviewer could see the diff, but not what was verified, which tests
   changed, or where to look first.
 
-codeflow keeps the task state on disk, gives each task its own worktree, makes
-the gate commands explicit, and attaches the results to the PR.
+claude-codeflow keeps the task state on disk, gives each task its own worktree,
+makes the gate commands explicit, and attaches the results to the PR.
 
 ## What you still approve
 
-1. The exact commands codeflow is allowed to run.
+1. The exact commands claude-codeflow is allowed to run.
 2. The task-spec, before any code is written.
 3. The plan.
 4. The self-review packet.
 5. The merge.
 
-codeflow never merges, never approves a pull request, and never turns a missing
-check into a passing one.
+claude-codeflow never merges, never approves a pull request, and never turns a
+missing check into a passing one.
 
 ## The flow
 
@@ -83,7 +83,7 @@ again. Nothing retries or resolves conflicts on its own.
   done. Marking a step done requires a result, not just a checkmark.
 - **A task worktree** — a `codeflow/<id>` branch and a worktree under
   `~/.local/state/codeflow/worktrees/<repo>/<task>`. The task tree is the tree
-  that will ship; codeflow will not fall back to your main checkout.
+  that will ship; claude-codeflow will not fall back to your main checkout.
 - **`evidence.json`** — the gates that ran, exit codes, durations, logs, tree
   hash, config hash, gate-set hash, branch, and dirty state. A rebase can reuse
   evidence only when the tree is unchanged.
@@ -236,8 +236,8 @@ Global options: `--json`, `--task <id>`, `--help`, `--version`.
 - Evidence is tied to the tree, config, gate set, and branch. `pr` checks that
   the worktree is on the task branch and that the PR head matches the verified
   HEAD. If a rebase changes the tree, verify again.
-- `.codeflow/state` is local. If git tracks it, codeflow refuses to run rather
-  than trust state that came from the repository.
+- `.codeflow/state` is local. If git tracks it, claude-codeflow refuses to run
+  rather than trust state that came from the repository.
 - A repository with no checks reports `none`, not success. A pending or
   indeterminate check is not green.
 - `finish` only accepts an open or merged PR. A task that will not ship uses
@@ -246,8 +246,8 @@ Global options: `--json`, `--task <id>`, `--help`, `--version`.
 - If `gh` is installed but not authenticated, delivery fails. It does not
   silently fall back to a compare URL, and `finish` does not treat the failure as
   "no PR exists".
-- codeflow stores no tokens. `gh` owns GitHub auth. Gate logs stay local and may
-  contain whatever your project prints.
+- claude-codeflow stores no tokens. `gh` owns GitHub auth. Gate logs stay local
+  and may contain whatever your project prints.
 - There is no merge command. The skill forbids `gh pr merge`.
 
 ## Artifacts
@@ -296,7 +296,7 @@ resolves against the main repository root; add that directory to `.gitignore`.
 
 The design notes live in [`docs/`](docs/):
 
-- [`goal-and-requirements.md`](docs/goal-and-requirements.md) — what codeflow is, and what it is not.
+- [`goal-and-requirements.md`](docs/goal-and-requirements.md) — what claude-codeflow is, and what it is not.
 - [`architecture.md`](docs/architecture.md) — the decisions and invariants behind the state model.
 - [`contracts.md`](docs/contracts.md) — the JSON shapes and error codes.
 - [`DESIGN.md`](docs/DESIGN.md) — the integrated design and build order.
