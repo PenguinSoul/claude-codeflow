@@ -26,9 +26,11 @@ test("plugin manifest points at the real components", () => {
   assert.equal(manifest.version, "0.1.0");
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.commands, "./commands/");
-  assert.equal(manifest.hooks, "./hooks/hooks.json");
-  assert.ok(existsSync(join(root, "skills/codeflow/SKILL.md")));
+  // Claude Code auto-loads hooks/hooks.json; declaring it again makes the
+  // whole plugin fail to load.
+  assert.equal("hooks" in manifest, false);
   assert.ok(existsSync(join(root, "hooks/hooks.json")));
+  assert.ok(existsSync(join(root, "skills/codeflow/SKILL.md")));
   assert.ok(existsSync(join(root, "hooks/session-start.mjs")));
   assert.ok(existsSync(join(root, "bin/codeflow")));
 });
