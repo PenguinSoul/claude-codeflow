@@ -704,6 +704,29 @@ test("watch --wait polls until checks settle", async (t) => {
   assert.ok(delivered.worktree);
 });
 
+test("watch records the observed pr state", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const delivered = await deliver(dir, t, {
+    prState: "OPEN",
+    checks: ["SUCCESS"],
+  });
+
+  const env = fakeGhEnv(t, { prState: "MERGED", checks: ["SUCCESS"] });
+  const watch = await invoke(["watch", "--json"], dir, env);
+  assert.equal(watch.code, 0, watch.err || watch.out);
+
+  const file = join(
+    dir,
+    ".codeflow/state/tasks",
+    delivered.taskId,
+    "pr.json",
+  );
+  const pr = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(pr.state, "merged");
+  assert.equal(typeof pr.observedAt, "string");
+  assert.ok(pr.observedAt.length > 0);
+});
+
 test("watch --wait reports a timeout without failing", async (t) => {
   const { dir } = repoWithRemote(t);
   await deliver(dir, t, { prState: "OPEN", checks: ["PENDING"] });

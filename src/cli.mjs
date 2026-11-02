@@ -2125,10 +2125,12 @@ async function watchCommand(repo, config, flags, env) {
   try {
     pr = readPr(paths, task.id) ?? pr;
     pr.checks = checks;
+    pr.state = String(status.state ?? "").toLowerCase() || pr.state;
+    pr.observedAt = nowIso();
     pr.mergeStateStatus = status.mergeStateStatus;
     pr.reviewDecision = status.reviewDecision;
     pr.headSha = status.headSha;
-    pr.lastReadAt = nowIso();
+    pr.lastReadAt = pr.observedAt;
     writeJsonAtomic(taskFile(paths, task.id, "pr.json"), pr);
   } finally {
     releaseLock(paths, task.id);
