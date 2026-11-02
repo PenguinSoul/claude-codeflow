@@ -440,11 +440,21 @@ test("a failing required gate exits 1 and records a failed evidence file", async
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 1);
+  assert.equal(result.json.ok, false);
+  assert.equal(result.json.error.code, "E_GATE_FAILED");
+  assert.match(result.json.error.message, /^gate "test" exited 1$/);
+  assert.equal(result.json.error.details.gate, "test");
   assert.equal(result.json.data.result, "fail");
   const evidence = JSON.parse(
     readFileSync(join(dir, result.json.data.evidencePath), "utf8"),
   );
   assert.equal(evidence.result, "fail");
+
+  const human = await invoke(["verify"], dir);
+  assert.equal(human.code, 1);
+  assert.match(human.err, /error: E_GATE_FAILED/);
+  assert.match(human.out, /Result: fail/);
+  assert.match(human.out, /test\s+fail/);
 });
 
 test("attention failOn blocks the task", async (t) => {
@@ -462,6 +472,9 @@ test("attention failOn blocks the task", async (t) => {
 
   const result = await invoke(["verify", "--json"], dir);
   assert.equal(result.code, 1);
+  assert.equal(result.json.ok, false);
+  assert.equal(result.json.error.code, "E_GATE_FAILED");
+  assert.match(result.json.error.message, /attention items failed the gate: suppression/);
   assert.equal(result.json.data.result, "fail");
 
   const status = await invoke(["status", "--json", "--task", taskId], dir);
@@ -559,7 +572,11 @@ test("start creates a worktree and abandon removes it", async (t) => {
   assert.equal(abandoned.json.data.removedWorktree, true);
   assert.equal(existsSync(planned.worktree), false);
 
-  const done = await invoke(["status", "--json"], dir);
+  const cleared = await invoke(["status", "--json"], dir);
+  assert.equal(cleared.json.data.task, null);
+  assert.deepEqual(cleared.json.data.next, ["new"]);
+
+  const done = await invoke(["status", "--task", planned.task.id, "--json"], dir);
   assert.equal(done.json.data.task.status, "abandoned");
 });
 

@@ -111,18 +111,36 @@ export function ok(command, data, meta = {}, warnings = []) {
   };
 }
 
+function errorValue(err) {
+  return err instanceof CodedError
+    ? err.toJSON()
+    : err && typeof err === "object" && typeof err.code === "string"
+      ? {
+          code: err.code,
+          message: err.message ?? "",
+          details: err.details ?? null,
+          hint: err.hint ?? null,
+        }
+      : error(ERROR_CODES.INTERNAL, err?.message ?? String(err));
+}
+
+// Commands that fail but still produce a report (currently only `verify`) keep
+// their `data` so the caller can render the gate table. Every other failure
+// drops it; see "Envelope" in docs/contracts.md.
+export function failWithData(command, err, data, meta = {}, warnings = []) {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    command,
+    ok: false,
+    data,
+    error: errorValue(err),
+    warnings,
+    meta: metaWith(meta),
+  };
+}
+
 export function fail(command, err, meta = {}) {
-  const value =
-    err instanceof CodedError
-      ? err.toJSON()
-      : err && typeof err === "object" && typeof err.code === "string"
-        ? {
-            code: err.code,
-            message: err.message ?? "",
-            details: err.details ?? null,
-            hint: err.hint ?? null,
-          }
-        : error(ERROR_CODES.INTERNAL, err?.message ?? String(err));
+  const value = errorValue(err);
   return {
     schemaVersion: SCHEMA_VERSION,
     command,

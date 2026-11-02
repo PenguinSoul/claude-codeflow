@@ -6,6 +6,7 @@ import {
   EXIT,
   exitFor,
   fail,
+  failWithData,
   ok,
 } from "./contracts.mjs";
 import {
@@ -397,7 +398,9 @@ function emit(envelope, flags, out, err) {
   }
   if (!envelope.ok) {
     err.write(`${renderError(envelope)}\n`);
-    return;
+    if (envelope.data === null) {
+      return;
+    }
   }
   if (flags.brief && envelope.command === "status") {
     const brief = renderBrief(envelope.data);
@@ -990,6 +993,47 @@ function verifyCommand(repo, config, flags) {
     });
   }
 
+  const evidencePath = repoRelative(
+    repo.mainRoot,
+    taskFile(paths, task.id, "evidence.json"),
+  );
+  const failedGate = run.results.find(
+    (gate) => gate.required && (gate.timedOut || gate.exitCode !== 0),
+  );
+  const failure =
+    result === "pass"
+      ? null
+      : {
+          code: failedGate?.timedOut
+            ? ERROR_CODES.GATE_TIMEOUT
+            : ERROR_CODES.GATE_FAILED,
+          message:
+            failed.length > 0
+              ? `attention items failed the gate: ${failed.join(", ")}`
+              : failedGate
+                ? `gate "${failedGate.name}" ${failedGate.timedOut ? "timed out" : `exited ${failedGate.exitCode}`}`
+                : "the gates did not pass",
+          details: {
+            result,
+            evidencePath,
+            gate: failedGate?.name ?? null,
+            attention: failed,
+            gates: run.results.map((gate) => ({
+              name: gate.name,
+              exitCode: gate.exitCode,
+              timedOut: gate.timedOut,
+              required: gate.required,
+              logPath: gate.logPath
+                ? repoRelative(repo.mainRoot, gate.logPath)
+                : null,
+            })),
+          },
+          hint:
+            failed.length > 0
+              ? "Review the attention items, fix them, then run `codeflow resume`."
+              : "Fix the failing gate, then run `codeflow verify` again.",
+        };
+
   return {
     data: {
       result,
@@ -1006,14 +1050,12 @@ function verifyCommand(repo, config, flags) {
         flaky: gate.flaky,
       })),
       attention,
-      evidencePath: repoRelative(
-        repo.mainRoot,
-        taskFile(paths, task.id, "evidence.json"),
-      ),
+      evidencePath,
       next,
     },
     taskId,
     warnings: resultWarnings,
+    failure,
     exitCode: result === "pass" ? EXIT.OK : EXIT.GATE,
   };
 }
@@ -2509,15 +2551,19 @@ export async function run(argv, io = {}) {
         );
     }
 
-    const envelope = ok(
-      command,
-      result.data,
-      {
-        repoRoot: repo.mainRoot,
-        taskId: result.taskId ?? flags.task ?? null,
-      },
-      result.warnings ?? [],
-    );
+    const resultMeta = {
+      repoRoot: repo.mainRoot,
+      taskId: result.taskId ?? flags.task ?? null,
+    };
+    const envelope = result.failure
+      ? failWithData(
+          command,
+          result.failure,
+          result.data ?? null,
+          resultMeta,
+          result.warnings ?? [],
+        )
+      : ok(command, result.data, resultMeta, result.warnings ?? []);
     emit(envelope, flags, out, err);
     return result.exitCode ?? EXIT.OK;
   } catch (error) {
