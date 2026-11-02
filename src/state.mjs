@@ -84,6 +84,22 @@ export function writeActive(paths, taskId) {
   });
 }
 
+// The pointer is a convenience default, not an ownership record. Clear it only
+// when it still names the task that just finished, so `finish --task A` cannot
+// drop a pointer that has already moved on to B.
+export function clearActive(paths, taskId) {
+  const current = readJsonSafe(paths.activePath);
+  if (!current || current.taskId !== taskId) {
+    return false;
+  }
+  try {
+    unlinkSync(paths.activePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function taskDir(paths, id) {
   assertTaskId(id);
   return path.join(paths.tasksDir, id);

@@ -76,6 +76,7 @@ import {
 import {
   acquireLock,
   acquireProjectLock,
+  clearActive,
   ensureState,
   readActive,
   readPr,
@@ -1307,9 +1308,11 @@ function abandonCommand(repo, config, flags) {
 
     task.status = "abandoned";
     task.blocked = null;
+    const activeCleared = clearActive(paths, task.id);
     const event = appendEvent(paths, task.id, "task.abandoned", actor(repo), {
       removedWorktree,
       deletedBranch,
+      activeCleared,
     });
     task.lastEventHash = event.hash;
     writeTask(paths, task);
@@ -1319,6 +1322,7 @@ function abandonCommand(repo, config, flags) {
         taskId,
         removedWorktree,
         deletedBranch,
+        activeCleared,
         status: "abandoned",
       },
       taskId,
@@ -1453,10 +1457,12 @@ function finishCommand(repo, config, flags, env) {
 
     task.status = "done";
     task.blocked = null;
+    const activeCleared = clearActive(paths, task.id);
     const event = appendEvent(paths, task.id, "task.finished", actor(repo), {
       removedWorktree,
       deletedBranch,
       mergeConfirmedBy,
+      activeCleared,
     });
     task.lastEventHash = event.hash;
     writeTask(paths, task);
@@ -1467,6 +1473,7 @@ function finishCommand(repo, config, flags, env) {
         removedWorktree,
         deletedBranch,
         mergeConfirmedBy,
+        activeCleared,
         status: "done",
       },
       taskId,
