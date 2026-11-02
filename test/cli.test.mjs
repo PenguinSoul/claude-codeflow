@@ -656,6 +656,12 @@ test("self-review, approve, pr, watch, and comments form the delivery flow", asy
     0,
   );
 
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.code, 0, status.err || status.out);
+  assert.ok(status.json.data.approvals.selfReview);
+  assert.equal(status.json.data.approvals.selfReview.stale, false);
+  assert.deepEqual(status.json.data.next, ["pr"]);
+
   const pr = await invoke(["pr", "--json"], dir, env);
   assert.equal(pr.code, 0, pr.err || pr.out);
   assert.equal(pr.json.data.mode, "gh");

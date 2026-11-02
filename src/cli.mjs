@@ -2260,6 +2260,21 @@ function statusCommand(repo, config, flags) {
   }
 
   const approvals = task ? approvalState(paths, task) : null;
+  if (task && approvals?.selfReview) {
+    const worktree = existingTaskWorktree(repo, task);
+    let fresh = false;
+    if (worktree) {
+      try {
+        fresh = selfReviewFresh(paths, task, {
+          cwd: worktree,
+          base: config.baseBranch,
+        }).fresh;
+      } catch {
+        fresh = false;
+      }
+    }
+    approvals.selfReview.stale = !fresh;
+  }
   let next = task ? nextFor(task.status) : ["new"];
   const warnings = [];
   if (approvals?.design?.stale) {
@@ -2274,6 +2289,8 @@ function statusCommand(repo, config, flags) {
       code: "W_APPROVAL_STALE",
       message: "plan.json changed since plan approval",
     });
+  } else if (approvals?.selfReview && !approvals.selfReview.stale) {
+    next = next.filter((step) => step !== "self-review");
   }
 
   return {

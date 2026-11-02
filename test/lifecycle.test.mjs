@@ -454,6 +454,9 @@ test("plan progress stays approved and pr requires every step done", async (t) =
   const status = await invoke(["status", "--json"], dir);
   assert.equal(status.json.data.task.status, "verified");
   assert.equal(status.json.data.approvals.plan.stale, false);
+  assert.ok(status.json.data.approvals.selfReview);
+  assert.equal(status.json.data.approvals.selfReview.stale, false);
+  assert.deepEqual(status.json.data.next, ["pr"]);
 
   const delivered = await invoke(["pr", "--json"], dir, env);
   assert.equal(delivered.code, 0, delivered.err || delivered.out);

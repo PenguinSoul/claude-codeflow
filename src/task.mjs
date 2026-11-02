@@ -250,6 +250,25 @@ export function approveTask(paths, task, target, options = {}) {
   return task;
 }
 
+function selfReviewState(paths, task) {
+  const file = taskFile(paths, task.id, "review.json");
+  let current = null;
+  if (fileExists(file)) {
+    try {
+      current = sha256(stableStringify(JSON.parse(readText(file))));
+    } catch {
+      current = null;
+    }
+  }
+  const approval = task.approvals?.selfReview;
+  return approval
+    ? {
+        hash: approval.hash,
+        stale: current !== approval.hash,
+      }
+    : null;
+}
+
 export function approvalState(paths, task) {
   const designFile = taskFile(paths, task.id, "TASK.md");
   const planFile = planPath(paths, task.id);
@@ -276,6 +295,7 @@ export function approvalState(paths, task) {
           stale: planCurrent !== task.approvals.plan.hash,
         }
       : null,
+    selfReview: selfReviewState(paths, task),
   };
 }
 
