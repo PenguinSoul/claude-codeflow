@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/PenguinSoul/codeflow/actions/workflows/ci.yml/badge.svg)](https://github.com/PenguinSoul/codeflow/actions/workflows/ci.yml)
+[![CI](https://github.com/PenguinSoul/claude-codeflow/actions/workflows/ci.yml/badge.svg)](https://github.com/PenguinSoul/claude-codeflow/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
@@ -106,15 +106,15 @@ worktree. If `.codeflow/state` is tracked by git, every command refuses to run.
 ## Install
 
 ```bash
-git clone https://github.com/PenguinSoul/codeflow.git
-cd codeflow
+git clone https://github.com/PenguinSoul/claude-codeflow.git
+cd claude-codeflow
 claude --plugin-dir .
 ```
 
 Or install from the repository as a marketplace:
 
 ```text
-/plugin install codeflow --marketplace PenguinSoul/codeflow
+/plugin install codeflow --marketplace PenguinSoul/claude-codeflow
 ```
 
 Claude Code does not put a plugin's `bin/` directory on the Bash tool's `PATH`
