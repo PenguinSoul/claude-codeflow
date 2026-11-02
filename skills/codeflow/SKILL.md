@@ -81,9 +81,15 @@ These are hard stops, not advice.
 - **Never touch the base branch.** Work in the task worktree and `codeflow/<id>`
   branch.
 - **Never finish an unmerged task.** When `gh` reports the PR open, `finish`
-  refuses even with `--confirm` or `--force`. `--force` only bypasses a dirty
+  refuses even with `--confirm` or `--force`. A recorded PR is re-read from
+  `gh` before cleanup even when the task is already marked `merged`; the status
+  only counts when no observation is possible. `--force` only bypasses a dirty
   worktree; a `gh` failure is blocked, not confirmation. Use `abandon` only when the
   human explicitly decides the task will not ship, never to escape a gate or review.
+- **Never create a delivery artifact out of band.** A PR is pushed and created
+  by `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" pr`, never by hand, never through the
+  GitHub API, never by a second tool. If a human did it anyway, stop and ask: the
+  task has no recorded delivery, and `finish` will not pretend it does.
 - **Never guess at a conflict.** A rebase conflict, ambiguous requirement, or
   security concern becomes `blocked`; ask the human.
 - **Never hide a failure.** Report the error code, the failing gate, and the
