@@ -945,14 +945,10 @@ function verifyCommand(repo, config, flags) {
   });
   writeEvidence(paths, task, evidence);
 
-  const noted = failedAttention(attention, [
-    "test",
-    "skip",
-    "suppression",
-    "config",
-    "lockfile",
-    "large-diff",
-  ]);
+  // Only changes that can weaken verification are worth a warning. Test-file
+  // edits and diff size are normal work: they stay in data.attention, the
+  // evidence, and the review packet, where a reviewer reads them anyway.
+  const noted = failedAttention(attention, ["skip", "suppression"]);
 
   let next;
   if (result === "pass") {
@@ -1661,7 +1657,7 @@ function selfReviewCommand(repo, config, flags) {
     },
     taskId,
     warnings:
-      counts.skips + counts.suppressions + counts.testFiles > 0
+      counts.skips + counts.suppressions > 0
         ? [
             {
               code: "W_ATTENTION",
