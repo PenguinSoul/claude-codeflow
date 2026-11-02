@@ -13,7 +13,7 @@ import {
   writeActive,
   writeTask,
 } from "../src/state.mjs";
-import { writeJsonAtomic } from "../src/util.mjs";
+import { slugify, writeJsonAtomic } from "../src/util.mjs";
 import { cleanup, tempRepo } from "./helpers.mjs";
 
 test("statePaths and active pointer round-trip", (t) => {
@@ -58,6 +58,28 @@ test("writeTask, readTask, listTasks, and nextTaskId are consistent", (t) => {
   assert.equal(readTask(paths, first).title, "Fix login");
   assert.equal(listTasks(paths).length, 2);
   assert.match(first, /^\d{4}-\d{2}-\d{2}-fix-login/);
+});
+
+test("non-ASCII titles keep a stable, distinguishable task id", (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const config = defaultConfig(findRepo(dir));
+  const paths = statePaths(dir, config);
+  ensureState(paths);
+
+  const first = nextTaskId(paths, "修复登录页样式");
+  const repeat = nextTaskId(paths, "修复登录页样式");
+  const other = nextTaskId(paths, "使い方ガイド");
+
+  assert.match(first, /^\d{4}-\d{2}-\d{2}-t-[0-9a-f]{8}$/);
+  assert.equal(repeat, first);
+  assert.notEqual(other, first);
+  assert.equal(slugify("修复登录页样式"), slugify("修复登录页样式"));
+  assert.match(slugify("修复登录页样式"), /^t-[0-9a-f]{8}$/);
+  assert.match(slugify("混合 mixed 标题"), /^mixed$/);
+  assert.equal(slugify(""), "task");
+  assert.equal(slugify("!!!"), slugify("!!!"));
+  assert.match(slugify("!!!"), /^t-[0-9a-f]{8}$/);
 });
 
 test("statePaths rejects a stateDir that escapes the repository", (t) => {
