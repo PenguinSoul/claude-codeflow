@@ -148,10 +148,26 @@ test("init, status, and doctor form a working slice", async (t) => {
   assert.equal(brief.out, "");
 });
 
+function rewriteConfig(dir, mutate) {
+  const file = join(dir, ".codeflow/config.json");
+  const config = JSON.parse(readFileSync(file, "utf8"));
+  mutate(config);
+  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+}
+
 test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
   await invoke(["init", "--json"], dir);
+
+  // The default worktreeRoot lives under $HOME. Assert against a root this test
+  // owns, so a read-only or missing home cannot fail it for the wrong reason.
+  const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-doctor-wt-"));
+  t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+  rewriteConfig(dir, (config) => {
+    config.worktreeRoot = worktreeRoot;
+  });
+
   const env = fakeGhEnv(t, { checks: ["SUCCESS"] });
 
   const result = await invoke(["doctor", "--json"], dir, env);
@@ -163,6 +179,35 @@ test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {
   assert.equal(checks.get("worktreeRoot").ok, true);
   assert.equal(checks.get("schema").ok, true);
   assert.equal(checks.get("locks").ok, true);
+});
+
+test("doctor fails the worktree root when it cannot write", async (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0) {
+    t.skip("mode bits do not deny writes here");
+    return;
+  }
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await invoke(["init", "--json"], dir);
+
+  const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-doctor-ro-"));
+  t.after(() => {
+    chmodSync(worktreeRoot, 0o700);
+    rmSync(worktreeRoot, { recursive: true, force: true });
+  });
+  chmodSync(worktreeRoot, 0o500);
+  rewriteConfig(dir, (config) => {
+    config.worktreeRoot = worktreeRoot;
+  });
+
+  const env = fakeGhEnv(t, { checks: ["SUCCESS"] });
+  const result = await invoke(["doctor", "--json"], dir, env);
+  assert.equal(result.code, 0, result.err || result.out);
+  const check = result.json.data.checks.find(
+    (entry) => entry.name === "worktreeRoot",
+  );
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /not writable/);
 });
 
 test("init is idempotent without force and rewrites with force", async (t) => {

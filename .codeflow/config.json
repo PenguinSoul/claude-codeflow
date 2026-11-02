@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "baseBranch": "main",
+  "remote": "origin",
+  "worktreeRoot": ".worktrees",
+  "stateDir": ".codeflow/state",
+  "gates": [
+    {
+      "name": "test",
+      "command": "npm run test",
+      "cwd": ".",
+      "tier": "fast",
+      "kinds": [
+        "code",
+        "test",
+        "infra"
+      ],
+      "required": true,
+      "timeoutSec": 600
+    },
+    {
+      "name": "check",
+      "command": "npm run check",
+      "cwd": ".",
+      "tier": "fast",
+      "kinds": [],
+      "required": true,
+      "timeoutSec": 120
+    }
+  ],
+  "verify": {
+    "retryFlaky": true,
+    "maxRetries": 1
+  },
+  "pr": {
+    "template": ".github/PULL_REQUEST_TEMPLATE.md",
+    "screenshots": "manual",
+    "titlePrefix": "",
+    "sections": {}
+  },
+  "attention": {
+    "largeDiffFiles": 25,
+    "largeDiffLines": 1200,
+    "failOn": []
+  }
+}
