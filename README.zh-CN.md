@@ -91,7 +91,16 @@ claude --plugin-dir .
 /plugin install codeflow --marketplace PenguinSoul/codeflow
 ```
 
-插件启用期间，它的 `bin/` 会加入 Bash 工具的 `PATH`。也可以直接在 checkout 里运行 `./bin/codeflow`。
+实测 Claude Code 2.1.278 不会把插件的 `bin/` 加入 Bash 工具的 `PATH`。需要显式加入，或直接用绝对路径调用：
+
+```bash
+# 当前 shell 临时加入 PATH
+export PATH="/path/to/codeflow/bin:$PATH"
+codeflow --version
+
+# 或者直接用绝对路径调用
+/path/to/codeflow/bin/codeflow --version
+```
 
 ## 快速开始
 
@@ -238,6 +247,8 @@ codeflow finish
 ```
 
 worktree 默认在 `~/.local/state/codeflow/worktrees/<repo>/<task>`。每个任务有自己的锁；`active.json` 只是省略 `--task` 时的默认指针。
+
+建议把 `worktreeRoot` 设为仓库内的路径（如 `.worktrees`）：主仓库和任务 worktree 在同一文件系统内，相对路径也按主仓库根解析；记得把该目录加入 `.gitignore`。
 
 ## 更多细节
 

@@ -144,7 +144,7 @@ test("init, status, and doctor form a working slice", async (t) => {
 
   const brief = await invoke(["status", "--brief"], dir);
   assert.equal(brief.code, 0);
-  assert.match(brief.out, /no active task/);
+  assert.equal(brief.out, "");
 });
 
 test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {
@@ -655,6 +655,12 @@ test("self-review, approve, pr, watch, and comments form the delivery flow", asy
     (await invoke(["approve", "self-review", "--json"], dir)).code,
     0,
   );
+
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.code, 0, status.err || status.out);
+  assert.ok(status.json.data.approvals.selfReview);
+  assert.equal(status.json.data.approvals.selfReview.stale, false);
+  assert.deepEqual(status.json.data.next, ["pr"]);
 
   const pr = await invoke(["pr", "--json"], dir, env);
   assert.equal(pr.code, 0, pr.err || pr.out);

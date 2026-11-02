@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { cleanup, tempRepo } from "./helpers.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
@@ -26,9 +27,11 @@ test("plugin manifest points at the real components", () => {
   assert.equal(manifest.version, "0.1.0");
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.commands, "./commands/");
-  assert.equal(manifest.hooks, "./hooks/hooks.json");
-  assert.ok(existsSync(join(root, "skills/codeflow/SKILL.md")));
+  // Claude Code auto-loads hooks/hooks.json; declaring it again makes the
+  // whole plugin fail to load.
+  assert.equal("hooks" in manifest, false);
   assert.ok(existsSync(join(root, "hooks/hooks.json")));
+  assert.ok(existsSync(join(root, "skills/codeflow/SKILL.md")));
   assert.ok(existsSync(join(root, "hooks/session-start.mjs")));
   assert.ok(existsSync(join(root, "bin/codeflow")));
 });
@@ -102,6 +105,29 @@ test("the session hook is registered, executable, and non-fatal outside a repo",
     },
   );
   assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
+test("the session hook stays silent in a repo with no active task", (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const init = spawnSync(
+    process.execPath,
+    [join(root, "bin/codeflow"), "init", "--json"],
+    { cwd: dir, encoding: "utf8", timeout: 5000 },
+  );
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const env = { ...process.env };
+  delete env.CLAUDE_PROJECT_DIR;
+  const result = spawnSync(
+    process.execPath,
+    [join(root, "hooks/session-start.mjs")],
+    { cwd: dir, encoding: "utf8", timeout: 5000, env },
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
   assert.equal(result.stderr, "");
 });
 

@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { run } from "../src/cli.mjs";
 import {
   acquireLock,
@@ -78,9 +78,12 @@ function repoWithRemote(t) {
 }
 
 async function setupPlanned(dir, t, options = {}) {
-  const { kind = "code", durable = true } = options;
-  const worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-lifecycle-wt-"));
-  t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+  const { kind = "code", durable = true, worktreeRoot: rootOption } = options;
+  let worktreeRoot = rootOption;
+  if (!worktreeRoot) {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "codeflow-lifecycle-wt-"));
+    t.after(() => rmSync(worktreeRoot, { recursive: true, force: true }));
+  }
 
   assert.equal((await invoke(["init", "--json"], dir)).code, 0);
   const configFile = join(dir, ".codeflow/config.json");
@@ -310,6 +313,23 @@ test("the task workflow runs from the task worktree", async (t) => {
   assert.equal(verified.json.data.result, "pass");
 });
 
+test("a relative worktreeRoot resolves from the main repo, the worktree, and a subdirectory", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlanned(dir, t, { worktreeRoot: ".worktrees" });
+  assert.equal(isAbsolute(planned.worktree), false);
+
+  const worktree = resolve(dir, planned.worktree);
+  const nested = join(worktree, "nested", "src");
+  mkdirSync(nested, { recursive: true });
+
+  for (const cwd of [dir, worktree, nested]) {
+    const verified = await invoke(["verify", "--json"], cwd);
+    assert.equal(verified.code, 0, verified.err || verified.out);
+    assert.equal(verified.json.data.result, "pass");
+  }
+});
+
 test("verify refuses a missing task worktree", async (t) => {
   const { dir } = repoWithRemote(t);
   const planned = await setupPlanned(dir, t);
@@ -434,6 +454,9 @@ test("plan progress stays approved and pr requires every step done", async (t) =
   const status = await invoke(["status", "--json"], dir);
   assert.equal(status.json.data.task.status, "verified");
   assert.equal(status.json.data.approvals.plan.stale, false);
+  assert.ok(status.json.data.approvals.selfReview);
+  assert.equal(status.json.data.approvals.selfReview.stale, false);
+  assert.deepEqual(status.json.data.next, ["pr"]);
 
   const delivered = await invoke(["pr", "--json"], dir, env);
   assert.equal(delivered.code, 0, delivered.err || delivered.out);

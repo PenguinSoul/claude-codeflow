@@ -399,7 +399,10 @@ function emit(envelope, flags, out, err) {
     return;
   }
   if (flags.brief && envelope.command === "status") {
-    out.write(`${renderBrief(envelope.data)}\n`);
+    const brief = renderBrief(envelope.data);
+    if (brief) {
+      out.write(`${brief}\n`);
+    }
     return;
   }
   out.write(`${render(envelope)}\n`);
@@ -1074,20 +1077,19 @@ function startCommand(repo, config, flags) {
   }
 
   const wasActive = task.status === "active";
+  const worktree = taskWorktreePath(repo, task);
   acquireLock(paths, task.id, {
     command: "start",
     force: flags.forceUnlock,
   });
   try {
     const result = addWorktree(repo.mainRoot, {
-      worktree: task.worktree,
+      worktree,
       branch: task.branch,
       base: config.baseBranch,
     });
-    assertWorktreeBranch(task.worktree, task.branch);
-    if (
-      !fileExists(path.join(task.worktree, ".codeflow", "config.json"))
-    ) {
+    assertWorktreeBranch(worktree, task.branch);
+    if (!fileExists(path.join(worktree, ".codeflow", "config.json"))) {
       throw new CodedError(
         ERROR_CODES.CONFIG,
         "the task worktree does not contain .codeflow/config.json",
@@ -1259,7 +1261,7 @@ function abandonCommand(repo, config, flags) {
       data: {
         taskId,
         worktree: task.worktree,
-        wouldRemove: Boolean(task.worktree && fileExists(task.worktree)),
+        wouldRemove: Boolean(existingTaskWorktree(repo, task)),
         dryRun: true,
       },
       taskId,
@@ -1280,16 +1282,17 @@ function abandonCommand(repo, config, flags) {
   });
   try {
     let removedWorktree = false;
-    if (task.worktree && fileExists(task.worktree)) {
-      if (!isClean(task.worktree) && !flags.force) {
+    const worktree = existingTaskWorktree(repo, task);
+    if (worktree) {
+      if (!isClean(worktree) && !flags.force) {
         throw new CodedError(
           ERROR_CODES.DIRTY_TREE,
           "the worktree has uncommitted changes",
-          { worktree: task.worktree },
+          { worktree },
           "Commit or discard them, or pass --force.",
         );
       }
-      removeWorktree(repo.mainRoot, task.worktree, { force: flags.force });
+      removeWorktree(repo.mainRoot, worktree, { force: flags.force });
       removedWorktree = true;
     }
 
@@ -1403,7 +1406,7 @@ function finishCommand(repo, config, flags, env) {
       data: {
         taskId,
         worktree: task.worktree,
-        wouldRemove: Boolean(task.worktree && fileExists(task.worktree)),
+        wouldRemove: Boolean(existingTaskWorktree(repo, task)),
         mergeConfirmedBy,
         dryRun: true,
       },
@@ -1417,16 +1420,17 @@ function finishCommand(repo, config, flags, env) {
   });
   try {
     let removedWorktree = false;
-    if (task.worktree && fileExists(task.worktree)) {
-      if (!isClean(task.worktree) && !flags.force) {
+    const worktree = existingTaskWorktree(repo, task);
+    if (worktree) {
+      if (!isClean(worktree) && !flags.force) {
         throw new CodedError(
           ERROR_CODES.DIRTY_TREE,
           "the worktree has uncommitted changes",
-          { worktree: task.worktree },
+          { worktree },
           "Commit or discard them, or pass --force.",
         );
       }
-      removeWorktree(repo.mainRoot, task.worktree, { force: flags.force });
+      removeWorktree(repo.mainRoot, worktree, { force: flags.force });
       removedWorktree = true;
     }
 
@@ -1489,20 +1493,34 @@ function configForCommand(repo, command, task, projectConfig) {
       ? loadConfig(repo.root)
       : projectConfig;
   }
-  if (
-    TASK_TREE_COMMANDS.has(command) &&
-    task?.worktree &&
-    fileExists(task.worktree)
-  ) {
-    return loadConfig(task.worktree);
+  if (TASK_TREE_COMMANDS.has(command)) {
+    const worktree = existingTaskWorktree(repo, task);
+    if (worktree) {
+      return loadConfig(worktree);
+    }
   }
   return projectConfig;
 }
 
+function taskWorktreePath(repo, task) {
+  if (!task?.worktree) {
+    return null;
+  }
+  return path.isAbsolute(task.worktree)
+    ? task.worktree
+    : path.resolve(repo.mainRoot, task.worktree);
+}
+
+function existingTaskWorktree(repo, task) {
+  const worktree = taskWorktreePath(repo, task);
+  return worktree && fileExists(worktree) ? worktree : null;
+}
+
 function taskWorktree(repo, task, options = {}) {
   const { required = true } = options;
-  if (task.worktree && fileExists(task.worktree)) {
-    return task.worktree;
+  const worktree = existingTaskWorktree(repo, task);
+  if (worktree) {
+    return worktree;
   }
   if (!required) {
     return repo.mainRoot;
@@ -2210,8 +2228,7 @@ function statusCommand(repo, config, flags) {
   if (task) {
     const value = readJsonSafe(taskFile(paths, task.id, "evidence.json"));
     if (value) {
-      const evidenceCwd =
-        task.worktree && fileExists(task.worktree) ? task.worktree : null;
+      const evidenceCwd = existingTaskWorktree(repo, task);
       const tree = evidenceCwd
         ? gitOrNull(["rev-parse", "HEAD^{tree}"], { cwd: evidenceCwd })
         : null;
@@ -2246,6 +2263,21 @@ function statusCommand(repo, config, flags) {
   }
 
   const approvals = task ? approvalState(paths, task) : null;
+  if (task && approvals?.selfReview) {
+    const worktree = existingTaskWorktree(repo, task);
+    let fresh = false;
+    if (worktree) {
+      try {
+        fresh = selfReviewFresh(paths, task, {
+          cwd: worktree,
+          base: config.baseBranch,
+        }).fresh;
+      } catch {
+        fresh = false;
+      }
+    }
+    approvals.selfReview.stale = !fresh;
+  }
   let next = task ? nextFor(task.status) : ["new"];
   const warnings = [];
   if (approvals?.design?.stale) {
@@ -2260,6 +2292,8 @@ function statusCommand(repo, config, flags) {
       code: "W_APPROVAL_STALE",
       message: "plan.json changed since plan approval",
     });
+  } else if (approvals?.selfReview && !approvals.selfReview.stale) {
+    next = next.filter((step) => step !== "self-review");
   }
 
   return {
