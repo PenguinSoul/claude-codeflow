@@ -1,4 +1,4 @@
-# codeflow
+# claude-codeflow
 
 [English](README.md) | **简体中文**
 
@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-codeflow 是一个很小的 CLI 和 Claude Code 插件，用来和 coding agent 一起干活，但不用把整个仓库交给它。
+claude-codeflow 是一个为了增强 Agent First 仓库而开发的软件工程流程插件。
 
 它把一个任务从一段简短的 spec，带到 plan、隔离的 worktree、项目检查、self-review，最后开一个 PR。Claude 负责读代码、写代码；你负责批准 design、plan、self-review 和 merge。真正跑过的检查会留在磁盘上，PR 描述从这些记录生成，而不是靠 agent 回忆。
 
@@ -24,17 +24,17 @@ codeflow 是一个很小的 CLI 和 Claude Code 插件，用来和 coding agent 
 - 两个 agent 在同一个工作区里互相踩。
 - reviewer 看得到 diff，但看不到验证了什么、改了哪些测试、哪里最该先看。
 
-codeflow 把任务状态放到磁盘上，给每个任务一个独立 worktree，把 gate 命令摆到明面上，再把结果带进 PR。
+claude-codeflow 把任务状态放到磁盘上，给每个任务一个独立 worktree，把 gate 命令摆到明面上，再把结果带进 PR。
 
 ## 哪些事仍然由你决定
 
-1. codeflow 可以运行哪些命令。
+1. claude-codeflow 可以运行哪些命令。
 2. 写代码前的 task-spec。
 3. 计划。
 4. self-review 包。
 5. 合并。
 
-codeflow 不 merge，不 approve PR，也不会把“没跑”的检查写成“通过”。
+claude-codeflow 不 merge，不 approve PR，也不会把“没跑”的检查写成“通过”。
 
 ## 流程
 
@@ -63,7 +63,7 @@ done`。遇到 rebase 冲突、gate 失败、worktree 丢失之类的问题，�
 
 - **`TASK.md`**：Request、Product、Design、Durable updates、Deferrals。写代码前由人批准。`pr` 要求有耐久更新记录，避免任务做完、仓库什么都没学到。
 - **`plan.json`**：按 commit 粒度的步骤，每步有标题、commit subject 和计划中的检查。批准只覆盖这些不可变字段；`plan step` 记录状态、总结和实际结果，`pr` 要求所有步骤都完成。标记 done 时必须给结果，不能只打个勾。
-- **任务 worktree**：`codeflow/<id>` 分支，加上 `~/.local/state/codeflow/worktrees/<repo>/<task>` 下的独立工作树。任务的树就是要交付的树；codeflow 不会退回去验证你的主 checkout。
+- **任务 worktree**：`codeflow/<id>` 分支，加上 `~/.local/state/codeflow/worktrees/<repo>/<task>` 下的独立工作树。任务的树就是要交付的树；claude-codeflow 不会退回去验证你的主 checkout。
 - **`evidence.json`**：跑了哪些 gate、退出码、耗时、日志、tree hash、config hash、gate-set hash、分支和 dirty 状态。rebase 之后，只有树没变才可复用。
 - **`REVIEW.md`**：diff stat、计划状态、验证结果、风险项、scope drift 和最该重点看的地方，集中在一份包里。
 - **`PR_BODY.md`**：从 task-spec、plan、evidence 和仓库自己的 PR 模板生成。
@@ -204,11 +204,11 @@ codeflow finish
 
 - Gate 命令就是代码。`init` 不会执行它们；`trust` 展示每一条，并把批准绑定到精确的 config hash。任务分支改了 config，就要单独批准那个 config。
 - 证据绑定到 tree、config、gate set 和分支。`pr` 会检查 worktree 是否在任务分支上、PR head 是否等于已验证的 HEAD。rebase 改了树，就重新 verify。
-- `.codeflow/state` 是本地状态。如果它被 git 跟踪，codeflow 直接拒绝运行，不会信任仓库带来的 state。
+- `.codeflow/state` 是本地状态。如果它被 git 跟踪，claude-codeflow 直接拒绝运行，不会信任仓库带来的 state。
 - 仓库没有 checks 时报告 `none`，不是 success。pending 或无法判断，也不是绿。
 - `finish` 只接受已开或已合并的 PR。不会交付的任务用 `abandon`。`--force` 只绕过 dirty worktree，不绕过合并检查。
 - `gh` 装了但没登录时，交付会失败。它不会悄悄退回 compare URL，`finish` 也不会把失败当成“没有 PR”。
-- codeflow 不存 token，GitHub 认证归 `gh`。Gate 日志只在本机，里面可能有项目自己打印的敏感信息。
+- claude-codeflow 不存 token，GitHub 认证归 `gh`。Gate 日志只在本机，里面可能有项目自己打印的敏感信息。
 - 没有 merge 命令。skill 明确禁止 `gh pr merge`。
 
 ## 产物
@@ -252,7 +252,7 @@ worktree 默认在 `~/.local/state/codeflow/worktrees/<repo>/<task>`。每个任
 
 设计文档在 [`docs/`](docs/)：
 
-- [`goal-and-requirements.md`](docs/goal-and-requirements.md)：codeflow 是什么、不是什么。
+- [`goal-and-requirements.md`](docs/goal-and-requirements.md)：claude-codeflow 是什么、不是什么。
 - [`architecture.md`](docs/architecture.md)：状态模型背后的决策和不变量。
 - [`contracts.md`](docs/contracts.md)：JSON 形状和错误码。
 - [`DESIGN.md`](docs/DESIGN.md)：整合后的设计与实现顺序。
