@@ -1,9 +1,9 @@
 ---
 description: Create the task branch and worktree
-allowed-tools: Bash(codeflow:*), Read
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/codeflow:*), Read
 ---
 
-Run `codeflow start --json`.
+Run `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" start --json`.
 
 It requires `.codeflow/config.json` committed on the base branch, creates the task
 branch and an isolated worktree, and checks that the worktree is on the task branch.

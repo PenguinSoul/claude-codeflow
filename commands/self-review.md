@@ -1,9 +1,9 @@
 ---
 description: Build the self-review packet
-allowed-tools: Bash(codeflow:*), Read
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/codeflow:*), Read
 ---
 
-Run `codeflow self-review --json`.
+Run `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" self-review --json`.
 
 Read `REVIEW.md` and summarize the verification table, attention items, scope
 drift, and closest-look areas for the human. Add `--scope-drift` and

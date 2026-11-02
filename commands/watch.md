@@ -1,9 +1,9 @@
 ---
 description: Read the pull request checks without merging
-allowed-tools: Bash(codeflow:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/codeflow:*)
 ---
 
-Run `codeflow watch --json` for a one-shot snapshot. Use `--wait` only when the
+Run `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" watch --json` for a one-shot snapshot. Use `--wait` only when the
 human explicitly asks to wait for checks. Bound the wait with `--timeout <seconds>`
 and `--interval <ms>`; a timeout is reported, not treated as a failure.
 

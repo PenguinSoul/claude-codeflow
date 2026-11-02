@@ -198,7 +198,7 @@ spotlight for the human, never an automatic verdict.
 ```text
 codeflow/
   .claude-plugin/plugin.json
-  bin/codeflow                 # on the Bash tool PATH
+  bin/codeflow                 # invoked via ${CLAUDE_PLUGIN_ROOT}
   src/*.mjs                    # zero-dependency Node ESM
   commands/*.md                # thin wrappers over the CLI
   skills/codeflow/SKILL.md     # workflow policy, gates, red lines

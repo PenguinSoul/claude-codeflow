@@ -50,7 +50,7 @@ test("the marketplace manifest and icon are present", () => {
   assert.equal(icon.readUInt32BE(20), 512);
 });
 
-test("every command has a description, a codeflow tool grant, and a CLI call", () => {
+test("every command has a description, a plugin-root grant, and a CLI call", () => {
   const commands = readdirSync(join(root, "commands")).filter((name) =>
     name.endsWith(".md"),
   );
@@ -59,12 +59,24 @@ test("every command has a description, a codeflow tool grant, and a CLI call", (
     const text = readFileSync(join(root, "commands", name), "utf8");
     const fm = frontmatter(text);
     assert.match(fm, /^description:/m, `${name} has no description`);
+    // Claude Code does not put the plugin's bin/ on PATH, so the grant and the
+    // call both have to name the plugin root; the variable is substituted in
+    // frontmatter and body alike (verified on 2.1.278).
     assert.match(
       fm,
-      /allowed-tools:.*Bash\(codeflow:\*\)/,
-      `${name} does not grant codeflow`,
+      /allowed-tools:.*Bash\(\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/codeflow:\*\)/,
+      `${name} does not grant the plugin-root CLI`,
     );
-    assert.match(text, /codeflow /, `${name} never calls the CLI`);
+    assert.match(
+      text,
+      /"\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/codeflow" /,
+      `${name} never calls the CLI by its plugin-root path`,
+    );
+    assert.doesNotMatch(
+      text,
+      /`codeflow\s/,
+      `${name} still invokes a bare codeflow`,
+    );
     assert.doesNotMatch(
       text,
       /gh pr merge/,

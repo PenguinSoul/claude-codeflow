@@ -117,7 +117,7 @@ Only these are excluded by decision. Anything neither listed nor excluded is ope
 - **A second agent runtime.** Claude is the agent; codeflow is deterministic tooling.
 - **Issue-tracker sync.** Issues are referenced, not mirrored.
 - **Multi-repository orchestration.** One repository per invocation.
-- **MCP.** The plugin uses a CLI on `PATH`; an MCP adapter is a later, separate decision.
+- **MCP.** The plugin ships a CLI and invokes it by absolute path; an MCP adapter is a later, separate decision.
 - **Screenshot automation.** The PR body leaves an explicit placeholder unless the
   repository configures a capture command.
 - **Secret management.** codeflow stores no tokens and delegates GitHub auth to `gh`.
