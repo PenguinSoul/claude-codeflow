@@ -118,14 +118,13 @@ Or install from the repository as a marketplace:
 ```
 
 Claude Code does not put a plugin's `bin/` directory on the Bash tool's `PATH`
-(tested on 2.1.278). Add it explicitly, or call the executable by absolute path:
+(tested on 2.1.278), so the commands invoke the CLI through
+`${CLAUDE_PLUGIN_ROOT}` and grant exactly that path. Nothing needs to be exported.
+
+To call the CLI yourself, outside Claude Code, use the checkout or the installed
+cache:
 
 ```bash
-# Add the CLI to PATH for this shell.
-export PATH="/path/to/codeflow/bin:$PATH"
-codeflow --version
-
-# Or call it by absolute path.
 /path/to/codeflow/bin/codeflow --version
 ```
 

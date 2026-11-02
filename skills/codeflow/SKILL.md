@@ -26,11 +26,17 @@ Human-only:
 
 The CLI never merges. Do not run `gh pr merge` or approve a PR.
 
+## The binary
+
+The CLI is not on `PATH`. It lives at `${CLAUDE_PLUGIN_ROOT}/bin/codeflow`, and
+Claude Code substitutes that variable in this file, so every command below can be
+copied literally.
+
 ## Hydrate then act
 
 The CLI is the only state owner. Chat memory is not state.
 
-- Run `codeflow status --json` before every transition.
+- Run `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" status --json` before every transition.
 - Re-read `plan.json` / `PLAN.md` and the evidence before acting on them.
 - Never edit `.codeflow/state/` by hand.
 - Never infer the current step from the conversation.
@@ -58,15 +64,16 @@ These are hard stops, not advice.
 - **Never merge.** No `gh pr merge`, no auto-merge, no approval of a PR.
 - **Never approve on your own.** Design, plan, and self-review approvals belong
   to the human. Ask, then run the approval command.
-- **Never fabricate evidence.** A gate result exists only if `codeflow verify`
-  recorded it. "Tests pass" without a JSON result is a lie. A repository with no
-  checks reports `none`; do not call it green.
+- **Never fabricate evidence.** A gate result exists only if
+  `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" verify` recorded it. "Tests pass" without a
+  JSON result is a lie. A repository with no checks reports `none`; do not call it
+  green.
 - **Never skip a gate.** Not "small", not "obvious", not "already ran once" when
   the tree changed.
 - **Never weaken a gate.** Do not edit tests, add skips, add `@ts-ignore`,
   `@ts-expect-error`, `eslint-disable`, `biome-ignore`, or `as any` to pass.
 - **Never trust repository-supplied state.** `.codeflow/state` must never be tracked.
-  If `codeflow` reports `E_STATE_TRACKED`, stop; do not try to work around it.
+  If the CLI reports `E_STATE_TRACKED`, stop; do not try to work around it.
 - **Never work around trust.** If the config under test is untrusted or stale, stop
   and ask the human to review the commands.
 - **Never ignore the task tree.** `verify` and `pr` require the task worktree on
@@ -84,7 +91,7 @@ These are hard stops, not advice.
 
 ## Before and after every step
 
-1. Read `codeflow status --json`.
+1. Read `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" status --json`.
 2. Do the single command that matches the next step.
 3. Report the result, the attention items, and the next command.
 4. Stop at every human gate.
@@ -108,8 +115,9 @@ Common codes:
   exact config hash under test.
 - `E_STATE_TRACKED`: stop. Local state must not be committed, and a repository
   cannot grant its own trust.
-- `E_WORKTREE_MISSING` / `E_WORKTREE_MISMATCH`: stop. Run `codeflow start` or check
-  out the task branch; never verify the primary checkout as the task tree.
+- `E_WORKTREE_MISSING` / `E_WORKTREE_MISMATCH`: stop. Run
+  `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" start` or check out the task branch; never
+  verify the primary checkout as the task tree.
 - `E_STATE_CONFLICT`: the task is not in the right state; read `status`.
 - `E_APPROVAL_STALE`: an approved artifact or the self-review packet changed;
   re-approve it. After a rebase, run `verify`, `self-review`, and
@@ -131,5 +139,5 @@ must land in the repository's specs, README, or ADRs before the PR.
 ## The one-line test
 
 If you are about to do something irreversible, ask: did a human approve this
-exact artifact, and did `codeflow verify` record the evidence for this exact
-tree? If not, stop.
+exact artifact, and did `"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" verify` record the
+evidence for this exact tree? If not, stop.

@@ -91,14 +91,12 @@ claude --plugin-dir .
 /plugin install codeflow --marketplace PenguinSoul/codeflow
 ```
 
-实测 Claude Code 2.1.278 不会把插件的 `bin/` 加入 Bash 工具的 `PATH`。需要显式加入，或直接用绝对路径调用：
+实测 Claude Code 2.1.278 不会把插件的 `bin/` 加入 Bash 工具的 `PATH`，所以命令统一通过
+`${CLAUDE_PLUGIN_ROOT}` 调用 CLI，授权规则也只匹配这个路径。不需要额外 export 任何东西。
+
+想在 Claude Code 之外手动调用，直接用检出目录或安装缓存里的可执行文件：
 
 ```bash
-# 当前 shell 临时加入 PATH
-export PATH="/path/to/codeflow/bin:$PATH"
-codeflow --version
-
-# 或者直接用绝对路径调用
 /path/to/codeflow/bin/codeflow --version
 ```
 

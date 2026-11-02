@@ -125,8 +125,8 @@ point and a supply-chain surface.
 
 ### D3 — No MCP in the first build
 
-The plugin integrates through commands and `bin/` on `PATH`, not through an MCP
-server.
+The plugin integrates through commands that invoke the bundled CLI, not through an
+MCP server.
 
 **Why:** the CLI is already a stable tool boundary; MCP adds lifecycle, schema, and
 transport work without changing the workflow behavior.
@@ -318,16 +318,22 @@ best-effort read. `doctor` reports the versions it finds.
 
 **Rejected:** implicit migrations; reading unknown shapes best-effort.
 
-### D18 — `bin/` is the integration surface; commands are thin
+### D18 — The CLI is the integration surface; commands invoke it from the plugin root
 
-Claude Code puts a plugin's `bin/` on the Bash tool's `PATH`. Commands call
-`codeflow <verb>` and render the JSON; they do not contain workflow logic.
+Claude Code does not put a plugin's `bin/` on the Bash tool's `PATH` (tested on
+2.1.278: `command -v codeflow` finds nothing, and `CLAUDE_PLUGIN_ROOT` is not in the
+session environment). Commands therefore invoke
+`"${CLAUDE_PLUGIN_ROOT}/bin/codeflow" <verb>` and grant exactly that path with
+`Bash(${CLAUDE_PLUGIN_ROOT}/bin/codeflow:*)`. Claude Code substitutes the variable in
+command content, in skill content, and in `allowed-tools`; a probe plugin confirmed
+all three.
 
-**Why:** one implementation, testable without Claude, and no path interpolation in
-command Markdown.
+**Why:** one implementation, testable without Claude, and commands stay thin.
 
-**Rejected:** calling scripts through `${CLAUDE_PLUGIN_ROOT}` in every command; a
-global `npm link`; duplicating logic in commands.
+**Rejected:** asking the human to export `PATH` (works only until the next shell, and
+breaks under the versioned marketplace cache path); granting plain `Bash` and
+calling the binary relatively (too broad for a tool that runs gates); a shim on
+`PATH` (nothing installs it).
 
 ### D19 — PR template fidelity; tick only evidence-backed items
 
