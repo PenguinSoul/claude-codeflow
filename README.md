@@ -305,7 +305,7 @@ The design notes live in [`docs/`](docs/):
 ## Development
 
 ```bash
-npm test                  # 114 tests: temporary repos, fake gates, fake gh
+npm test                  # 122 tests: temporary repos, fake gates, fake gh
 npm run check             # node --check on every source file
 claude plugin validate .  # manifest, commands, hooks, marketplace
 ```
