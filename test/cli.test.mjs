@@ -144,7 +144,7 @@ test("init, status, and doctor form a working slice", async (t) => {
 
   const brief = await invoke(["status", "--brief"], dir);
   assert.equal(brief.code, 0);
-  assert.match(brief.out, /no active task/);
+  assert.equal(brief.out, "");
 });
 
 test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {

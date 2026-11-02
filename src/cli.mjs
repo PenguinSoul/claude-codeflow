@@ -399,7 +399,10 @@ function emit(envelope, flags, out, err) {
     return;
   }
   if (flags.brief && envelope.command === "status") {
-    out.write(`${renderBrief(envelope.data)}\n`);
+    const brief = renderBrief(envelope.data);
+    if (brief) {
+      out.write(`${brief}\n`);
+    }
     return;
   }
   out.write(`${render(envelope)}\n`);

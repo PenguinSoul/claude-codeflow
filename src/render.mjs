@@ -80,7 +80,7 @@ export function renderStatus(data, warnings = []) {
 
 export function renderBrief(data) {
   if (!data.task) {
-    return `codeflow: no active task in ${data.repo.root}`;
+    return "";
   }
   const next = data.next.length > 0 ? data.next.join(", ") : "none";
   return `codeflow: ${data.task.id} [${data.task.status}] — ${data.task.title} → next: ${next}`;
