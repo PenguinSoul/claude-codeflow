@@ -1778,6 +1778,20 @@ async function prCommand(repo, config, flags, env) {
         "Resolve the conflict manually, run `codeflow resume`, then verify again.",
       );
     }
+    if (!rebase.ok) {
+      throw new CodedError(
+        ERROR_CODES.REBASE_FAILED,
+        `the task branch could not be rebased onto ${remote}/${config.baseBranch}`,
+        {
+          reason: rebase.reason,
+          stderr: rebase.stderr ?? null,
+          headBefore: rebase.headBefore,
+          headAfter: rebase.headAfter,
+          taskStatus: task.status,
+        },
+        "Fix the local git state (a blocked hook, a dirty index, or a broken remote ref), then run `codeflow pr` again.",
+      );
+    }
   }
 
   const evidence = readEvidence(paths, task.id);
