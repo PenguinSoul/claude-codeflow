@@ -132,6 +132,21 @@ test("renderPrBody fills sections from artifacts and only ticks evidence-backed 
   assert.doesNotMatch(body, /^old$/m);
 });
 
+test("an empty gate list says no gates ran instead of an empty table", () => {
+  const body = renderPrBody({
+    template,
+    task,
+    taskSpec,
+    plan,
+    evidence: { ...evidence, gates: [] },
+    config: { pr: { screenshots: "manual", titlePrefix: "" } },
+    review,
+    diffStatText: "1 file changed",
+  });
+
+  assert.match(body, /\| _\(none\)_ \| — \| — \| no gates ran \| — \|/);
+});
+
 test("a missing template falls back to the default shape", () => {
   const body = renderPrBody({
     template: "",
