@@ -248,6 +248,30 @@ test("pr rebases cleanly and refuses stale evidence until re-verified", async (t
   assert.equal(remoteHead, localHead);
 });
 
+test("a failed push reports why it failed", async (t) => {
+  const { dir } = repoWithRemote(t);
+  const planned = await setupPlanned(dir, t);
+
+  writeFileSync(join(planned.worktree, "task.txt"), "task\n");
+  git(planned.worktree, ["add", "-A"]);
+  git(planned.worktree, ["commit", "-m", "task change"]);
+  await verifyAndReview(dir);
+
+  const hook = join(dir, ".git/hooks/pre-push");
+  writeFileSync(hook, "#!/bin/sh\necho 'pre-push refused the update' >&2\nexit 1\n");
+  chmodSync(hook, 0o755);
+
+  const env = fakeGhEnv(t, { checks: ["SUCCESS"] });
+  const failed = await invoke(["pr", "--json"], dir, env);
+  assert.equal(failed.code, 4, failed.err || failed.out);
+  assert.equal(failed.json.error.code, "E_PUSH_FAILED");
+  assert.equal(failed.json.error.details.timedOut, false);
+  assert.match(failed.json.error.details.stderr, /pre-push refused the update/);
+
+  const taskAfter = JSON.parse(readFileSync(planned.taskFile, "utf8"));
+  assert.equal(taskAfter.status, "verified");
+});
+
 test("a rebase that cannot run is not reported as a conflict", async (t) => {
   const { dir } = repoWithRemote(t);
   const planned = await setupPlanned(dir, t);

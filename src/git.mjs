@@ -61,6 +61,7 @@ export function gitResult(args, options = {}) {
   return {
     ok: !result.error && result.status === 0,
     status: result.status ?? -1,
+    timedOut: result.error?.code === "ETIMEDOUT",
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     error: result.error ?? null,
