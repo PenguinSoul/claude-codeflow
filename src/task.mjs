@@ -44,13 +44,16 @@ export function taskTemplate(title) {
 }
 
 function strippedSections(markdown) {
+  // Repeated headings append to the first section with that name. Resetting the
+  // buffer on every heading let a second, empty `## Request` erase the first one
+  // and made `approve design` claim TASK.md was still a template.
   const sections = {};
   let current = null;
   for (const line of markdown.split(/\r?\n/)) {
     const heading = line.match(/^##\s+(.+?)\s*$/);
     if (heading) {
       current = heading[1].toLowerCase();
-      sections[current] = [];
+      sections[current] = sections[current] ?? [];
     } else if (current) {
       sections[current].push(line);
     }

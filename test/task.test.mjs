@@ -15,6 +15,7 @@ import {
   approvalState,
   approveTask,
   createTask,
+  durableUpdates,
   hashFile,
   missingTaskSections,
 } from "../src/task.mjs";
@@ -92,6 +93,22 @@ test("design approval refuses an unfilled template", (t) => {
   assert.throws(
     () => approveTask(paths, task, "design", { by: "Test <t@t>" }),
     (error) => error.code === "E_STATE_CONFLICT",
+  );
+});
+
+test("a repeated heading appends instead of wiping its section", (t) => {
+  const { paths, task } = setup(t);
+
+  // A duplicated empty heading used to reset the section buffer, so a filled
+  // Request looked empty and design approval refused a valid TASK.md.
+  const duplicated = `${SPEC}\n## Request\n\n## Design\n`;
+  writeFileSync(taskFile(paths, task.id, "TASK.md"), duplicated);
+
+  assert.deepEqual(missingTaskSections(duplicated), []);
+  assert.equal(durableUpdates(duplicated), "Not durable — test fixture.");
+  assert.equal(
+    approveTask(paths, task, "design", { by: "Test <t@t>" }).status,
+    "designed",
   );
 });
 
