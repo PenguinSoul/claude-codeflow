@@ -234,7 +234,12 @@ export function approveTask(paths, task, target, options = {}) {
       approvedAt: nowIso(),
       note,
     };
-    task.status = "planned";
+    // Re-approving a revised plan must not undo progress: a task that already
+    // started keeps its status, and the stale checks decide what to redo. Only
+    // the pre-start states move to "planned".
+    if (task.status === "created" || task.status === "designed") {
+      task.status = "planned";
+    }
   } else {
     throw new CodedError(
       ERROR_CODES.USAGE,
