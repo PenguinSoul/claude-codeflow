@@ -56,8 +56,10 @@ flowchart LR
 ```
 
 任务状态是 `created → designed → planned → active → verified → pr_open →
-done`。遇到 rebase 冲突、gate 失败、worktree 丢失之类的问题，任务会变成
-`blocked`，等你处理。`resume` 再继续；它不会自己重试，也不会自己解冲突。
+done`。rebase 冲突会让任务变成 `blocked`，等你处理；`resume` 回到之前的状态。
+gate 失败时任务保持 `active`，修好后重新 verify。task worktree 丢失时，
+`codeflow start` 会在任务分支上重建它，并保留 `verified` 或 `pr_open` 状态。
+它不会自己重试，也不会自己解冲突。
 
 ## 一个任务里有什么
 
@@ -163,6 +165,9 @@ codeflow finish
 
 所有命令都支持 `--json`。
 
+`--dry-run` 由 `init`、`new`、`start`、`verify`、`pr`、`finish` 和 `abandon` 实现。
+其他命令会直接拒绝该 flag，而不是静默忽略。
+
 ## 命令
 
 | 命令 | 作用 | 常用选项 |
@@ -182,7 +187,7 @@ codeflow finish
 | `resume` | 问题解决后继续 blocked 任务 | `--task` |
 | `finish` | 验证合并，然后删 worktree | `--confirm`、`--delete-branch`、`--force` |
 | `abandon` | 丢弃不会交付的任务 | `--confirm`、`--delete-branch`、`--force` |
-| `doctor` | 检查 git、gh、登录、worktree 根目录、state、schema 和锁 | — |
+| `doctor` | 检查 git、hooks、gh、登录、worktree 根目录、state、schema 和锁 | — |
 
 全局选项：`--json`、`--task <id>`、`--help`、`--version`。
 
@@ -206,7 +211,7 @@ codeflow finish
 - 证据绑定到 tree、config、gate set 和分支。`pr` 会检查 worktree 是否在任务分支上、PR head 是否等于已验证的 HEAD。rebase 改了树，就重新 verify。
 - `.codeflow/state` 是本地状态。如果它被 git 跟踪，claude-codeflow 直接拒绝运行，不会信任仓库带来的 state。
 - 仓库没有 checks 时报告 `none`，不是 success。pending 或无法判断，也不是绿。
-- `finish` 只接受已开或已合并的 PR。不会交付的任务用 `abandon`。`--force` 只绕过 dirty worktree，不绕过合并检查。
+- `finish` 要求任务有已开或已合并的 PR，并在 `gh` 报告 PR 仍为 open 时拒绝。不会交付的任务用 `abandon`。`--force` 只绕过 dirty worktree，不绕过合并检查。
 - `gh` 装了但没登录时，交付会失败。它不会悄悄退回 compare URL，`finish` 也不会把失败当成“没有 PR”。
 - claude-codeflow 不存 token，GitHub 认证归 `gh`。Gate 日志只在本机，里面可能有项目自己打印的敏感信息。
 - 没有 merge 命令。skill 明确禁止 `gh pr merge`。
@@ -260,7 +265,7 @@ worktree 默认在 `~/.local/state/codeflow/worktrees/<repo>/<task>`。每个任
 ## 开发
 
 ```bash
-npm test                  # 122 个测试：临时仓库、fake gate、fake gh
+npm test                  # 130 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```
@@ -272,7 +277,8 @@ CI 在 Node 20 和 22 上跑 `npm test` 和 `npm run check`。测试不联网；
 - 没有截图自动化；PR body 会留占位符。
 - 没有 MCP adapter、issue tracker 同步、多仓库编排、Web UI 或任务 GC。
 - 目前只有 schema v1；迁移会等第一次版本升级时再做。
-- Windows 原生行为还没有作为 CI gate。
+- Windows 原生行为还没有作为 CI gate；测试套件已可移植并在 Windows 11 上验证，
+  但 CI 仍只跑 Linux。
 - CLI 会检查 PR 状态，但不强制独立 reviewer；那仍然取决于你的仓库设置。
 
 ## 贡献

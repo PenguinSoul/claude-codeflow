@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -181,6 +180,19 @@ test("doctor reports gh auth, worktree root, schema, and locks", async (t) => {
   assert.equal(checks.get("locks").ok, true);
 });
 
+test("doctor reports repository git hooks", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await invoke(["init", "--json"], dir);
+  writeFileSync(join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\n");
+
+  const result = await invoke(["doctor", "--json"], dir);
+  assert.equal(result.code, 0, result.err || result.out);
+  const check = result.json.data.checks.find((item) => item.name === "gitHooks");
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /pre-commit/);
+});
+
 test("doctor fails the worktree root when it cannot write", async (t) => {
   if (process.platform === "win32" || process.getuid?.() === 0) {
     t.skip("mode bits do not deny writes here");
@@ -238,6 +250,36 @@ test("init --dry-run does not write config", async (t) => {
   assert.equal(result.code, 0);
   assert.equal(result.json.data.dryRun, true);
   assert.equal(existsSync(join(dir, ".codeflow/config.json")), false);
+});
+
+test("new --dry-run writes no task and does not move the pointer", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await invoke(["init", "--json"], dir);
+  execFileSync("git", ["add", ".codeflow/config.json"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "chore: config"], { cwd: dir });
+
+  const result = await invoke(
+    ["new", "Dry run probe", "--dry-run", "--json"],
+    dir,
+  );
+  assert.equal(result.code, 0, result.err || result.out);
+  assert.equal(result.json.data.dryRun, true);
+  assert.equal(
+    existsSync(join(dir, ".codeflow/state/tasks", result.json.data.taskId)),
+    false,
+  );
+  assert.equal(existsSync(join(dir, ".codeflow/state/active.json")), false);
+});
+
+test("commands without dry-run support reject the flag", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  await invoke(["init", "--json"], dir);
+
+  const result = await invoke(["trust", "--yes", "--dry-run", "--json"], dir);
+  assert.equal(result.code, 2);
+  assert.equal(result.json.error.code, "E_USAGE");
 });
 
 const SPEC = [
@@ -669,6 +711,65 @@ test("start creates a worktree and abandon removes it", async (t) => {
   assert.equal(done.json.data.task.status, "abandoned");
 });
 
+test("start repairs a missing worktree without changing status", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlannedTask(dir, t);
+
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  assert.equal((await invoke(["verify", "--json"], dir)).code, 0);
+  const before = await invoke(["status", "--json"], dir);
+  assert.equal(before.json.data.task.status, "verified");
+
+  execFileSync("git", ["worktree", "remove", planned.worktree], { cwd: dir });
+  assert.equal(existsSync(planned.worktree), false);
+
+  const repaired = await invoke(["start", "--json"], dir);
+  assert.equal(repaired.code, 0, repaired.err || repaired.out);
+  assert.equal(repaired.json.data.repaired, true);
+  assert.equal(repaired.json.data.status, "verified");
+  assert.ok(
+    repaired.json.warnings.some(
+      (warning) => warning.code === "W_WORKTREE_REPAIRED",
+    ),
+  );
+  assert.ok(existsSync(planned.worktree));
+
+  const after = await invoke(["status", "--json"], dir);
+  assert.equal(after.json.data.task.status, "verified");
+
+  assert.equal(
+    (await invoke(["abandon", "--confirm", "--json"], dir)).code,
+    0,
+  );
+});
+
+test("verify keeps a dirty tree out of verified", async (t) => {
+  const dir = tempRepo();
+  t.after(() => cleanup(dir));
+  const planned = await setupPlannedTask(dir, t);
+  assert.equal((await invoke(["start", "--json"], dir)).code, 0);
+  writeFileSync(join(planned.worktree, "dirty.txt"), "dirty\n");
+
+  const verified = await invoke(["verify", "--json"], dir);
+  assert.equal(verified.code, 0, verified.err || verified.out);
+  assert.equal(verified.json.data.result, "pass");
+  assert.equal(verified.json.data.dirty, true);
+  assert.ok(
+    verified.json.warnings.some((warning) => warning.code === "W_DIRTY_TREE"),
+  );
+  assert.deepEqual(verified.json.data.next, ["commit the work", "verify"]);
+
+  const status = await invoke(["status", "--json"], dir);
+  assert.equal(status.json.data.task.status, "active");
+  assert.deepEqual(status.json.data.next, ["commit the work", "verify"]);
+
+  assert.equal(
+    (await invoke(["abandon", "--confirm", "--force", "--json"], dir)).code,
+    0,
+  );
+});
+
 test("resume clears a blocked state", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
@@ -712,33 +813,6 @@ test("abandon refuses a dirty worktree without force", async (t) => {
   assert.equal(forced.code, 0);
   assert.equal(existsSync(planned.worktree), false);
 });
-
-function fakeGh(t) {
-  const bin = mkdtempSync(join(tmpdir(), "codeflow-gh-"));
-  t.after(() => rmSync(bin, { recursive: true, force: true }));
-  const script = join(bin, "gh");
-  writeFileSync(
-    script,
-    `#!/usr/bin/env bash
-set -e
-if [ "$1" = "--version" ]; then echo "gh version 2.103.2"; exit 0; fi
-if [ "$1" = "auth" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo '[]'; exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/o/r/pull/7"; exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","headRefOid":"abc","statusCheckRollup":[{"conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":null}],"mergeStateStatus":"BLOCKED","reviewDecision":""}'
-  exit 0
-fi
-if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi
-if [ "$1" = "api" ]; then echo '[]'; exit 0; fi
-echo "unexpected: $*" >&2
-exit 1
-`,
-  );
-  chmodSync(script, 0o755);
-  return { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-}
 
 test("self-review, approve, pr, watch, and comments form the delivery flow", async (t) => {
   const dir = tempRepo();

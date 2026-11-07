@@ -1,8 +1,17 @@
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
 import { runFile, which } from "./util.mjs";
 
-function ghBin(env = process.env) {
-  return which("gh", env) ?? "gh";
+// `CODEFLOW_GH_BIN` + `CODEFLOW_GH_SCRIPT` let tests (and users with a gh
+// wrapper) point at an executable plus a script prefix without relying on PATH
+// separators or shell shims, which do not behave the same on Windows.
+function ghCommand(env = process.env) {
+  if (env.CODEFLOW_GH_BIN) {
+    return {
+      file: env.CODEFLOW_GH_BIN,
+      prefix: env.CODEFLOW_GH_SCRIPT ? [env.CODEFLOW_GH_SCRIPT] : [],
+    };
+  }
+  return { file: which("gh", env) ?? "gh", prefix: [] };
 }
 
 function gh(args, options = {}) {
@@ -11,7 +20,8 @@ function gh(args, options = {}) {
     env = process.env,
     allowFail = false,
   } = options;
-  const result = runFile(ghBin(env), args, {
+  const { file, prefix } = ghCommand(env);
+  const result = runFile(file, [...prefix, ...args], {
     cwd,
     env,
     timeout: 120000,
@@ -39,12 +49,22 @@ function gh(args, options = {}) {
 }
 
 export function hasGh(env = process.env) {
-  const result = runFile(ghBin(env), ["--version"], { env });
+  const { file, prefix } = ghCommand(env);
+  const result = runFile(file, [...prefix, "--version"], { env });
   return result.ok;
 }
 
+export function ghExecutable(env = process.env) {
+  const { file, prefix } = ghCommand(env);
+  return prefix.length > 0 ? [file, ...prefix].join(" ") : file;
+}
+
 export function ghAuthStatus(env = process.env) {
-  const result = runFile(ghBin(env), ["auth", "status"], { env, timeout: 15000 });
+  const { file, prefix } = ghCommand(env);
+  const result = runFile(file, [...prefix, "auth", "status"], {
+    env,
+    timeout: 15000,
+  });
   return {
     ok: result.ok,
     detail: result.ok

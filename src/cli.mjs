@@ -34,7 +34,6 @@ import {
 } from "./attention.mjs";
 import {
   buildEvidence,
-  evidenceHash,
   gitTreeHash,
   isDirty,
   isFresh,
@@ -79,6 +78,7 @@ import {
   acquireProjectLock,
   clearActive,
   ensureState,
+  nextTaskId,
   readActive,
   readPr,
   readTask,
@@ -97,6 +97,7 @@ import {
   createTask,
   durableUpdates,
   hashFile,
+  TASK_KINDS,
 } from "./task.mjs";
 import { assertTrusted, commandsFor, isTrusted, trustConfig } from "./trust.mjs";
 import {
@@ -115,6 +116,16 @@ const TASK_LOCK_COMMANDS = new Set([
   "verify",
   "self-review",
   "pr",
+]);
+
+const DRY_RUN_COMMANDS = new Set([
+  "init",
+  "new",
+  "start",
+  "verify",
+  "pr",
+  "finish",
+  "abandon",
 ]);
 
 const COMMANDS = new Set([
@@ -188,7 +199,8 @@ Options:
   --interval <ms> Poll interval in milliseconds (watch only)
   --brief      One-line status (status only)
   --force      Overwrite config, force cleanup, or force unlock
-  --dry-run    Print side effects without applying them
+  --dry-run    Print side effects without applying them (init, new, start,
+               verify, pr, finish, abandon)
   --help       Show this help
   --version    Show the version
 `;
@@ -412,6 +424,11 @@ function emit(envelope, flags, out, err) {
   out.write(`${render(envelope)}\n`);
 }
 
+function stateExcludePattern(config) {
+  const dir = String(config.stateDir ?? ".codeflow/state").replace(/\/+$/, "");
+  return `${dir}/`;
+}
+
 function initCommand(repo, flags) {
   const file = configPath(repo.mainRoot);
   if (fileExists(file) && !flags.force) {
@@ -419,7 +436,7 @@ function initCommand(repo, flags) {
     repo.projectConfig = config;
     const paths = statePaths(repo.mainRoot, config);
     ensureState(paths);
-    ensureExcluded(repo);
+    ensureExcluded(repo, stateExcludePattern(config));
     return {
       data: {
         repoRoot: repo.mainRoot,
@@ -514,9 +531,32 @@ function newCommand(repo, config, flags, positional) {
     );
   }
   const paths = statePaths(repo.mainRoot, repo.projectConfig);
+  const kind = flags.kind ?? "code";
+  if (flags.dryRun) {
+    if (!TASK_KINDS.includes(kind)) {
+      throw new CodedError(
+        ERROR_CODES.USAGE,
+        `unknown task kind "${kind}"`,
+        { kinds: TASK_KINDS },
+        "Use code, docs, infra, test, or mixed.",
+      );
+    }
+    const id = nextTaskId(paths, title);
+    return {
+      data: {
+        taskId: id,
+        taskPath: repoRelative(repo.mainRoot, taskDir(paths, id)),
+        taskSpecPath: repoRelative(repo.mainRoot, taskFile(paths, id, "TASK.md")),
+        kind,
+        dryRun: true,
+        next: ["edit TASK.md", "approve design"],
+      },
+      taskId: id,
+    };
+  }
   const task = createTask(paths, repo, config, {
     title,
-    kind: flags.kind ?? "code",
+    kind,
     issues: flags.issues,
   });
   return {
@@ -951,7 +991,18 @@ function verifyCommand(repo, config, flags) {
   const noted = failedAttention(attention, ["skip", "suppression"]);
 
   let next;
-  if (result === "pass") {
+  if (result === "pass" && evidence.dirty) {
+    // The gates ran, but the evidence is not usable for delivery: `pr` only
+    // accepts a clean tree. Keep the task active so the next step is a commit.
+    task.status = "active";
+    task.blocked = null;
+    next = ["commit the work", "verify"];
+    warnings.push({
+      code: "W_DIRTY_TREE",
+      message:
+        "the worktree has uncommitted changes; commit them, then run `codeflow verify` again",
+    });
+  } else if (result === "pass") {
     task.status = "verified";
     task.blocked = null;
     next = ["self-review", "pr"];
@@ -977,6 +1028,7 @@ function verifyCommand(repo, config, flags) {
     kind: task.kind,
     inferredKind,
     effectiveKind,
+    dirty: evidence.dirty,
   });
   task.lastEventHash = event.hash;
   writeTask(paths, task);
@@ -1037,6 +1089,7 @@ function verifyCommand(repo, config, flags) {
       kind: task.kind,
       inferredKind,
       effectiveKind,
+      dirty: evidence.dirty,
       gates: run.results.map((gate) => ({
         name: gate.name,
         exitCode: gate.exitCode,
@@ -1076,11 +1129,16 @@ function startCommand(repo, config, flags) {
       { taskId },
     );
   }
-  if (task.status !== "planned" && task.status !== "active") {
+  const missingWorktree = !existingTaskWorktree(repo, task);
+  const repair =
+    missingWorktree &&
+    (task.status === "verified" || task.status === "pr_open");
+  if (task.status !== "planned" && task.status !== "active" && !repair) {
     throw new CodedError(
       ERROR_CODES.STATE_CONFLICT,
-      `task is ${task.status}; start requires a planned task`,
-      { status: task.status },
+      `task is ${task.status}; start requires a planned task, or a verified/pr_open task whose worktree is missing`,
+      { status: task.status, worktreeMissing: missingWorktree },
+      "Run `codeflow status` to inspect the task.",
     );
   }
 
@@ -1109,13 +1167,16 @@ function startCommand(repo, config, flags) {
         branch: task.branch,
         worktree: task.worktree,
         base: config.baseBranch,
+        status: task.status,
+        repair,
         dryRun: true,
       },
       taskId,
     };
   }
 
-  const wasActive = task.status === "active";
+  const previousStatus = task.status;
+  const wasActive = previousStatus === "active";
   const worktree = taskWorktreePath(repo, task);
   acquireLock(paths, task.id, {
     command: "start",
@@ -1136,17 +1197,26 @@ function startCommand(repo, config, flags) {
         "Commit .codeflow/config.json to the base branch before `codeflow start`.",
       );
     }
-    task.status = "active";
+    // A repair is not a new start: the branch and tree are unchanged, so a
+    // verified or pr_open task keeps its status and its evidence.
+    task.status = repair ? previousStatus : "active";
     const event = appendEvent(paths, task.id, "task.started", actor(repo), {
       branch: task.branch,
       worktree: task.worktree,
       base: config.baseBranch,
+      repaired: repair,
+      previousStatus,
     });
     task.lastEventHash = event.hash;
     writeTask(paths, task);
 
     const warnings = [];
-    if (wasActive) {
+    if (repair) {
+      warnings.push({
+        code: "W_WORKTREE_REPAIRED",
+        message: `the task worktree was missing; recreated it and kept the task ${task.status}`,
+      });
+    } else if (wasActive) {
       warnings.push({
         code: "W_ALREADY_ACTIVE",
         message: "the task was already active",
@@ -1164,6 +1234,8 @@ function startCommand(repo, config, flags) {
         taskId,
         branch: task.branch,
         worktree: task.worktree,
+        status: task.status,
+        repaired: repair,
         baseCommit: gitOrNull(
           ["rev-parse", "--short", config.baseBranch],
           { cwd: repo.mainRoot },
@@ -1583,7 +1655,7 @@ function taskWorktree(repo, task, options = {}) {
     ERROR_CODES.WORKTREE_MISSING,
     "the task worktree is missing",
     { taskId: task.id, worktree: task.worktree },
-    "Run `codeflow start` to recreate it, or `codeflow finish` if the task is complete.",
+    "Run `codeflow start` to recreate it (verified and pr_open tasks keep their status), or `codeflow abandon` if the task will not ship.",
   );
 }
 
@@ -2292,6 +2364,7 @@ function statusCommand(repo, config, flags) {
         result: value.result,
         treeHash: value.treeHash,
         finishedAt: value.finishedAt,
+        dirty: value.dirty,
         fresh: Boolean(
           value.result === "pass" &&
             value.dirty === false &&
@@ -2347,6 +2420,12 @@ function statusCommand(repo, config, flags) {
     warnings.push({
       code: "W_APPROVAL_STALE",
       message: "plan.json changed since plan approval",
+    });
+  } else if (task?.status === "active" && evidence?.dirty === true) {
+    next = ["commit the work", "verify"];
+    warnings.push({
+      code: "W_DIRTY_TREE",
+      message: "the worktree has uncommitted changes; commit, then verify again",
     });
   } else if (approvals?.selfReview && !approvals.selfReview.stale) {
     next = next.filter((step) => step !== "self-review");
@@ -2427,6 +2506,14 @@ export async function run(argv, io = {}) {
         "Run `codeflow --help`.",
       );
     }
+    if (flags.dryRun && !DRY_RUN_COMMANDS.has(command)) {
+      throw new CodedError(
+        ERROR_CODES.USAGE,
+        `${command} does not support --dry-run`,
+        { command, supported: [...DRY_RUN_COMMANDS] },
+        "Remove --dry-run, or use it with init, new, start, verify, pr, finish, or abandon.",
+      );
+    }
     const repo = findRepo(cwd);
     meta.repoRoot = repo.mainRoot;
     assertStateNotTracked(repo);
@@ -2463,7 +2550,7 @@ export async function run(argv, io = {}) {
       ? configForCommand(repo, command, task, projectConfig)
       : null;
 
-    if (paths && task && TASK_LOCK_COMMANDS.has(command)) {
+    if (paths && task && TASK_LOCK_COMMANDS.has(command) && !flags.dryRun) {
       acquireLock(paths, task.id, {
         command,
         force: flags.forceUnlock,
@@ -2471,7 +2558,7 @@ export async function run(argv, io = {}) {
       lockPaths = paths;
       heldTaskLock = task.id;
     }
-    if (paths && (command === "new" || command === "trust")) {
+    if (paths && (command === "new" || command === "trust") && !flags.dryRun) {
       acquireProjectLock(paths, {
         command,
         force: flags.forceUnlock,

@@ -80,6 +80,36 @@ export function evidenceHash(evidence) {
   return sha256(stableStringify(evidence));
 }
 
+// The self-review binds to the facts a reviewer signed off on, not to when the
+// command happened to run. A no-op re-verify must not invalidate a human
+// approval; a changed tree, config, gate set, result, or attention set must.
+export function evidenceBindingHash(evidence) {
+  return sha256(
+    stableStringify({
+      schemaVersion: evidence.schemaVersion,
+      taskId: evidence.taskId,
+      kind: evidence.kind,
+      inferredKind: evidence.inferredKind,
+      effectiveKind: evidence.effectiveKind,
+      treeHash: evidence.treeHash,
+      branch: evidence.branch,
+      dirty: evidence.dirty,
+      configHash: evidence.configHash,
+      gateSetHash: evidence.gateSetHash,
+      result: evidence.result,
+      gates: (evidence.gates ?? []).map((gate) => ({
+        name: gate.name,
+        tier: gate.tier,
+        required: gate.required,
+        exitCode: gate.exitCode,
+        timedOut: gate.timedOut,
+        flaky: gate.flaky,
+      })),
+      attention: evidence.attention,
+    }),
+  );
+}
+
 export function isFresh(evidence, expected) {
   if (expected.dirty === true) {
     return false;

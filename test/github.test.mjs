@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   compareUrl,
@@ -12,34 +11,7 @@ import {
   readChecks,
   readComments,
 } from "../src/github.mjs";
-import { cleanup, tempRepo } from "./helpers.mjs";
-
-function fakeGh(t) {
-  const dir = mkdtempSync(join(tmpdir(), "codeflow-gh-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const script = join(dir, "gh");
-  writeFileSync(
-    script,
-    `#!/usr/bin/env bash
-set -e
-if [ "$1" = "--version" ]; then echo "gh version 2.103.2"; exit 0; fi
-if [ "$1" = "auth" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo '[]'; exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/o/r/pull/7"; exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","headRefOid":"abc","statusCheckRollup":[{"conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":null}],"mergeStateStatus":"BLOCKED","reviewDecision":""}'
-  exit 0
-fi
-if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi
-if [ "$1" = "api" ]; then echo '[]'; exit 0; fi
-echo "unexpected: $*" >&2
-exit 1
-`,
-  );
-  chmodSync(script, 0o755);
-  return { ...process.env, PATH: `${dir}:${process.env.PATH}` };
-}
+import { cleanup, fakeGhEnv, tempRepo } from "./helpers.mjs";
 
 test("normalizeChecks counts success, failure, pending, and skipped", () => {
   const checks = normalizeChecks([
@@ -73,7 +45,10 @@ test("normalizeChecks reports no checks and unknown conclusions honestly", () =>
 test("findOpenPr, createOrUpdatePr, checks, and comments use gh", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
-  const env = fakeGh(t);
+  const env = fakeGhEnv(t, {
+    rollup: ["SUCCESS", "PENDING"],
+    graphql: false,
+  });
 
   assert.equal(await hasGh(env), true);
   assert.equal(findOpenPr(dir, "codeflow/x", env), null);
@@ -120,6 +95,8 @@ test("missing gh is reported as E_GH_MISSING", async (t) => {
   const dir = tempRepo();
   t.after(() => cleanup(dir));
   const env = { ...process.env, PATH: "" };
+  delete env.CODEFLOW_GH_BIN;
+  delete env.CODEFLOW_GH_SCRIPT;
 
   assert.equal(await hasGh(env), false);
   assert.throws(

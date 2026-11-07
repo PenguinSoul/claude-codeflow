@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -69,30 +68,42 @@ export function capture() {
   };
 }
 
-export function cleanup(dir) {
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function removeDir(dir) {
+  // Windows keeps a directory busy while a timed-out gate's grandchild (the
+  // shell started the real command) is still exiting. Retry synchronously
+  // instead of trusting fs.rmSync's maxRetries, which does not always fire.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 0 });
+      return;
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error.code)) {
+        throw error;
+      }
+      sleepSync(100);
+    }
+  }
   rmSync(dir, { recursive: true, force: true });
 }
 
-function rollupFor(state) {
-  if (state === "PENDING") {
-    return '{"status":"IN_PROGRESS","conclusion":null}';
-  }
-  if (state === "FAILURE") {
-    return '{"conclusion":"FAILURE"}';
-  }
-  if (state === "SKIPPED") {
-    return '{"conclusion":"SKIPPED"}';
-  }
-  return '{"conclusion":"SUCCESS"}';
+export function cleanup(dir) {
+  removeDir(dir);
 }
 
-export function fakeGhEnv(t, options = {}) {
+function fakeGhSource(options) {
   const {
     prState = "OPEN",
     checks = ["SUCCESS", "PENDING"],
+    rollup = null,
     failPrView = false,
     threads = [],
+    graphql = true,
   } = options;
+
   const graph = {
     data: {
       repository: {
@@ -117,55 +128,118 @@ export function fakeGhEnv(t, options = {}) {
       },
     },
   };
-  const graphJson = JSON.stringify(graph);
   const sequence = checks.length > 0 ? checks : ["SUCCESS"];
-  const cases = sequence
-    .map(
-      (state, index) => `    ${index + 1}) rollup='${rollupFor(state)}' ;;`,
-    )
-    .join("\n");
-  const fallback = rollupFor(sequence.at(-1));
 
-  const bin = mkdtempSync(join(tmpdir(), "codeflow-gh-"));
-  t.after(() => rmSync(bin, { recursive: true, force: true }));
-  const script = join(bin, "gh");
-  writeFileSync(
-    script,
-    `#!/usr/bin/env bash
-set -e
-if [ "$1" = "--version" ]; then echo "gh version 2.103.2"; exit 0; fi
-if [ "$1" = "auth" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo '[]'; exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/o/r/pull/7"; exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-${failPrView ? '  echo "gh: authentication failed" >&2\n  exit 1' : ""}
-  counter="$(dirname "$0")/view-count"
-  n=0
-  if [ -f "$counter" ]; then n=$(cat "$counter"); fi
-  n=$((n + 1))
-  echo "$n" > "$counter"
-  case "$n" in
-${cases}
-    *) rollup='${fallback}' ;;
-  esac
-  head=$(git rev-parse HEAD 2>/dev/null || echo abc)
-  echo "{\\"number\\":7,\\"url\\":\\"https://github.com/o/r/pull/7\\",\\"state\\":\\"${prState}\\",\\"headRefOid\\":\\"$head\\",\\"statusCheckRollup\\":[$rollup],\\"mergeStateStatus\\":\\"BLOCKED\\",\\"reviewDecision\\":\\"\\"}"
-  exit 0
-fi
-if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "o/r"; exit 0; fi
-if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  cat <<'JSON'
-${graphJson}
-JSON
-  exit 0
-fi
-if [ "$1" = "api" ]; then echo '[]'; exit 0; fi
-echo "unexpected: $*" >&2
-exit 1
-`,
-  );
-  chmodSync(script, 0o755);
-  return { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  return `import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const args = process.argv.slice(2);
+const here = dirname(fileURLToPath(import.meta.url));
+const sequence = ${JSON.stringify(sequence)};
+const staticRollup = ${JSON.stringify(rollup)};
+const prState = ${JSON.stringify(prState)};
+const failPrView = ${JSON.stringify(failPrView)};
+const graphql = ${JSON.stringify(graphql)};
+const graph = ${JSON.stringify(graph)};
+
+function rollupFor(state) {
+  if (state === "PENDING") {
+    return { status: "IN_PROGRESS", conclusion: null };
+  }
+  if (state === "FAILURE") {
+    return { conclusion: "FAILURE" };
+  }
+  if (state === "SKIPPED") {
+    return { conclusion: "SKIPPED" };
+  }
+  return { conclusion: "SUCCESS" };
 }
 
+function write(value) {
+  process.stdout.write(String(value) + "\\n");
+}
+
+function head() {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "abc";
+  }
+}
+
+if (args[0] === "--version") {
+  write("gh version 2.103.2");
+  process.exit(0);
+}
+if (args[0] === "auth") {
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "list") {
+  write("[]");
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "create") {
+  write("https://github.com/o/r/pull/7");
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "edit") {
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "view") {
+  if (failPrView) {
+    process.stderr.write("gh: authentication failed\\n");
+    process.exit(1);
+  }
+  const counter = join(here, "view-count");
+  let n = existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0;
+  n += 1;
+  writeFileSync(counter, String(n));
+  const states = staticRollup ?? [
+    sequence[Math.min(n - 1, sequence.length - 1)] ??
+      sequence[sequence.length - 1],
+  ];
+  write(
+    JSON.stringify({
+      number: 7,
+      url: "https://github.com/o/r/pull/7",
+      state: prState,
+      headRefOid: head(),
+      statusCheckRollup: states.map(rollupFor),
+      mergeStateStatus: "BLOCKED",
+      reviewDecision: "",
+    }),
+  );
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  write("o/r");
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  write(graphql ? JSON.stringify(graph) : "[]");
+  process.exit(0);
+}
+if (args[0] === "api") {
+  write("[]");
+  process.exit(0);
+}
+process.stderr.write("unexpected: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+}
+
+export function fakeGhEnv(t, options = {}) {
+  const bin = mkdtempSync(join(tmpdir(), "codeflow-gh-"));
+  t.after(() => removeDir(bin));
+  const script = join(bin, "gh.mjs");
+  writeFileSync(script, fakeGhSource(options));
+  return {
+    ...process.env,
+    CODEFLOW_GH_BIN: process.execPath,
+    CODEFLOW_GH_SCRIPT: script,
+  };
+}
