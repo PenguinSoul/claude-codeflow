@@ -79,7 +79,7 @@ test("a dead pid makes a lock stale", (t) => {
 test("force refuses a lock held by a live pid", (t) => {
   const { paths } = setup(t);
   writeJsonAtomic(lockPath(paths, "2026-10-27-task"), {
-    pid: 1,
+    pid: process.pid,
     host: hostname(),
     command: "old",
     startedAt: nowIso(),

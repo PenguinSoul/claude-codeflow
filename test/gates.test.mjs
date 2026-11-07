@@ -121,7 +121,7 @@ test("a timeout is recorded as a failure", (t) => {
     [
       gate({
         name: "slow",
-        command: 'node -e "setTimeout(()=>{}, 5000)"',
+        command: 'node -e "setTimeout(()=>{}, 1500)"',
         timeoutSec: 0.1,
       }),
     ],

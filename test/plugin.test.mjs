@@ -104,8 +104,17 @@ test("the session hook is registered, executable, and non-fatal outside a repo",
   const command = hooks.hooks.SessionStart[0].hooks[0].command;
   assert.match(command, /session-start\.mjs/);
 
-  const mode = statSync(join(root, "hooks/session-start.mjs")).mode;
-  assert.ok(mode & 0o111, "session-start.mjs must be executable");
+  const hookFile = join(root, "hooks/session-start.mjs");
+  if (process.platform === "win32") {
+    // Windows has no executable bit; the shebang is what makes the file runnable
+    // through the hook's bash invocation.
+    assert.match(readFileSync(hookFile, "utf8"), /^#!.*node/);
+  } else {
+    assert.ok(
+      statSync(hookFile).mode & 0o111,
+      "session-start.mjs must be executable",
+    );
+  }
 
   const result = spawnSync(
     process.execPath,
@@ -145,8 +154,11 @@ test("the session hook stays silent in a repo with no active task", (t) => {
 
 test("the CLI executable is runnable", () => {
   const file = join(root, "bin/codeflow");
-  const mode = statSync(file).mode;
-  assert.ok(mode & 0o111, "bin/codeflow must be executable");
+  if (process.platform === "win32") {
+    assert.match(readFileSync(file, "utf8"), /^#!.*node/);
+  } else {
+    assert.ok(statSync(file).mode & 0o111, "bin/codeflow must be executable");
+  }
   const result = spawnSync(process.execPath, [file, "--version"], {
     cwd: root,
     encoding: "utf8",
