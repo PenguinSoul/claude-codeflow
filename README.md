@@ -67,9 +67,11 @@ flowchart LR
 ```
 
 A task moves through `created → designed → planned → active → verified →
-pr_open → done`. If something goes wrong — a rebase conflict, a failing gate, a
-missing worktree — it becomes `blocked` and waits for you. `resume` picks it up
-again. Nothing retries or resolves conflicts on its own.
+pr_open → done`. A rebase conflict becomes `blocked` and waits for you; `resume`
+returns to the previous state. A failing gate leaves the task `active` so you can
+fix it and verify again. If a task worktree is lost, `codeflow start` recreates it
+on the task branch and keeps a `verified` or `pr_open` status. Nothing retries or
+resolves conflicts on its own.
 
 ## What a task contains
 
@@ -191,6 +193,9 @@ codeflow finish
 
 Every command supports `--json`.
 
+`--dry-run` is implemented by `init`, `new`, `start`, `verify`, `pr`, `finish`,
+and `abandon`. Other commands reject the flag instead of silently ignoring it.
+
 ## Commands
 
 | Command | What it does | Useful options |
@@ -210,7 +215,7 @@ Every command supports `--json`.
 | `resume` | Clear a blocked state after you fix the cause | `--task` |
 | `finish` | Verify the merge, then remove the worktree | `--confirm`, `--delete-branch`, `--force` |
 | `abandon` | Discard a task that will not ship | `--confirm`, `--delete-branch`, `--force` |
-| `doctor` | Check git, gh, auth, worktree root, state, schema, and locks | — |
+| `doctor` | Check git, hooks, gh, auth, worktree root, state, schema, and locks | — |
 
 Global options: `--json`, `--task <id>`, `--help`, `--version`.
 
@@ -240,9 +245,9 @@ Global options: `--json`, `--task <id>`, `--help`, `--version`.
   rather than trust state that came from the repository.
 - A repository with no checks reports `none`, not success. A pending or
   indeterminate check is not green.
-- `finish` only accepts an open or merged PR. A task that will not ship uses
-  `abandon`. `--force` only gets past a dirty worktree; it does not bypass the
-  merge check.
+- `finish` requires a task with an open or merged PR, and refuses while `gh`
+  reports the PR open. A task that will not ship uses `abandon`. `--force` only
+  gets past a dirty worktree; it does not bypass the merge check.
 - If `gh` is installed but not authenticated, delivery fails. It does not
   silently fall back to a compare URL, and `finish` does not treat the failure as
   "no PR exists".
@@ -304,7 +309,7 @@ The design notes live in [`docs/`](docs/):
 ## Development
 
 ```bash
-npm test                  # 122 tests: temporary repos, fake gates, fake gh
+npm test                  # 129 tests: temporary repos, fake gates, fake gh
 npm run check             # node --check on every source file
 claude plugin validate .  # manifest, commands, hooks, marketplace
 ```
@@ -319,7 +324,8 @@ Known limits:
   garbage collection.
 - Only schema version 1 exists. A migration will land with the first version
   bump.
-- Windows-native behavior is not a CI gate yet.
+- Windows-native behavior is not a CI gate yet; the suite is portable and was
+  verified on Windows 11, but CI still runs Linux only.
 - The CLI checks the PR state; it does not enforce an independent reviewer.
   That still depends on your repository settings.
 

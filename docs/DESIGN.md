@@ -108,7 +108,8 @@ automation (the agent fixes review comments) and autonomous merge are out of sco
 | `codeflow doctor` | `/codeflow:doctor` | Environment and state diagnostics |
 
 All commands support `--json` with the envelope in [`contracts.md`](contracts.md).
-Mutating commands support `--dry-run` where a command has side effects.
+`--dry-run` is implemented by `init`, `new`, `start`, `verify`, `pr`, `finish`, and
+`abandon`; other commands reject it instead of ignoring it.
 
 ## Artifact layout
 
@@ -208,10 +209,12 @@ codeflow/
   README.md
 ```
 
-The manifest declares `name`, `displayName`, `version`, `description`, `license`,
-`skills`, `commands`, and `hooks`; it declares no MCP server. Every command has
-`description`, `argument-hint`, and `allowed-tools: Bash(codeflow:*)`; its body only
-calls the CLI and renders the JSON. The `SessionStart` hook matches
+The manifest declares `name`, `displayName`, `version`, `description`, `author`,
+`license`, `keywords`, `skills`, and `commands`; it declares no MCP server. Hooks are
+auto-discovered from `hooks/hooks.json`. Every command has `description` and
+`allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/codeflow:*)`, and the commands that take
+an argument also declare `argument-hint`; the body only calls the CLI and renders the
+JSON. The `SessionStart` hook matches
 `startup|clear|compact`, runs `codeflow status --brief`, and never fails a session when
 codeflow is not configured.
 

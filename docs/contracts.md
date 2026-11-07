@@ -450,10 +450,11 @@ Embedded in evidence and rendered in the self-review packet:
 }
 ```
 
-Event types: `task.created`, `task.approved`, `plan.approved`, `task.started`,
-`verify.started`, `verify.finished`, `review.approved`, `pr.created`, `pr.updated`,
-`pr.checks`, `comments.read`, `task.blocked`, `task.resumed`, `task.finished`,
-`task.abandoned`, `config.trusted`.
+Event types: `task.created`, `task.approved`, `task.started`, `plan.step`,
+`verify.finished`, `review.approved`, `pr.created`, `task.resumed`,
+`task.finished`, `task.abandoned`. Trust is recorded in `trust.json`, not in the
+task event log; blocked and dirty states are carried by `task.json` and the
+`verify.finished` event data.
 
 ## Status data
 
@@ -618,6 +619,7 @@ requires a non-empty `--result`.
     "largeDiff": false
   },
   "evidencePath": ".codeflow/state/tasks/2026-10-26-fix-login/evidence.json",
+  "dirty": false,
   "next": ["self-review", "pr"]
 }
 ```
@@ -638,6 +640,11 @@ code, the per-gate log paths, and the attention categories that failed `failOn`.
 suppressions. Test-file changes and diff size are recorded in `data.attention`, the
 evidence, and the review packet, but they do not raise a warning; use
 `attention.failOn` to gate on them.
+
+A gate pass on a dirty worktree is not `verified`: `data.dirty` is `true`,
+`W_DIRTY_TREE` is returned, the task stays `active`, and `next` is
+`["commit the work", "verify"]`. Commit the work and verify again; `pr` requires
+clean evidence.
 
 ### `pr`
 
@@ -707,6 +714,12 @@ pull-request compare link.
 `task.json.approvals.selfReview`. `pr` requires that hash to match the current
 `review.json` in addition to the diff and evidence hashes. Editing notes, scope drift,
 or closest-look fields after sign-off invalidates the approval.
+
+`review.json.evidenceHash` is a binding hash over stable evidence facts: tree,
+branch, dirty state, config hash, gate-set hash, result, attention, and each gate's
+name, tier, required flag, exit code, timeout, and flaky flag. Timestamps,
+durations, log paths, and output tails are excluded, so re-running `verify` on an
+unchanged tree does not invalidate a signed self-review.
 
 ### `watch`
 

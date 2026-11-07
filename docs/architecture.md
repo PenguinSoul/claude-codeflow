@@ -467,7 +467,8 @@ Flow:
 3. `verify` refuses when `trust.json` is missing, when the hash differs, or when a
    command has changed.
 4. `doctor` reports trust status and the exact reason for a mismatch.
-5. `--dry-run` prints the commands that would run, without running them.
+5. `--dry-run` prints the side effects (commands, worktree, PR body, or cleanup)
+   without applying them; commands that do not implement it reject the flag.
 
 Trust covers commands, their cwd, and the config hash. It does not cover repository
 hooks or arbitrary commands the agent invents; the skill forbids those.
