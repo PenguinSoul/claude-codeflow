@@ -226,7 +226,13 @@ test("pr rebases cleanly and refuses stale evidence until re-verified", async (t
   assert.equal(first.code, 3);
   assert.equal(first.json.error.code, "E_APPROVAL_STALE");
   assert.equal(first.json.error.details.rebased, true);
-  assert.equal(readFileSync(join(planned.worktree, "base.txt"), "utf8"), "base\n");
+  assert.equal(
+    readFileSync(join(planned.worktree, "base.txt"), "utf8").replace(
+      /\r\n/g,
+      "\n",
+    ),
+    "base\n",
+  );
 
   const taskAfter = JSON.parse(readFileSync(planned.taskFile, "utf8"));
   assert.equal(taskAfter.status, "verified");
