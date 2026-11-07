@@ -75,6 +75,7 @@ Rules:
 | `E_TRUST_STALE` | `6` | The config hash has no matching approval |
 | `E_APPROVAL_STALE` | `3` | An approved artifact or the self-review packet changed |
 | `E_LOCKED` | `3` | A task or project lock is held |
+| `E_REBASE_FAILED` | `4` | The branch could not be rebased (blocked hook, dirty index, broken ref) |
 | `E_PUSH_FAILED` | `4` | Push failed or the PR head does not match the verified HEAD |
 
 ## Error object
@@ -658,7 +659,10 @@ evidence, and the review packet, but they do not raise a warning; use
 
 `pr` fetches and rebases the task branch onto `<remote>/<base>` before pushing. A
 conflict aborts the rebase, marks the task `blocked` with `E_REBASE_CONFLICT`, and
-leaves the worktree clean. If the rebase changes the tree, the existing evidence
+leaves the worktree clean. A rebase that cannot run at all — a blocked `pre-rebase`
+hook, an unreadable ref, a spawn failure — produces no unmerged paths, so it is not
+reported as a conflict: `pr` fails with `E_REBASE_FAILED` (exit `4`), keeps the task
+`verified`, and carries the rebase `stderr` in `error.details`. If the rebase changes the tree, the existing evidence
 is stale: `pr` refuses with `E_APPROVAL_STALE` (`details.rebased: true`) until
 `verify`, `self-review`, and `approve self-review` are run again. A rewritten
 branch is pushed with `--force-with-lease`.
