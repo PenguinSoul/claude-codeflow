@@ -52,6 +52,14 @@ export function gitVersion() {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
+function samePath(left, right) {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === "win32"
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b;
+}
+
 export function worktreeList(cwd) {
   const entries = [];
   let current = null;
@@ -60,7 +68,7 @@ export function worktreeList(cwd) {
       if (current) {
         entries.push(current);
       }
-      current = { worktree: line.slice("worktree ".length) };
+      current = { worktree: path.resolve(line.slice("worktree ".length)) };
     } else if (current && line.startsWith("HEAD ")) {
       current.head = line.slice("HEAD ".length);
     } else if (current && line.startsWith("branch ")) {
@@ -81,16 +89,17 @@ export function branchExists(cwd, branch) {
 
 export function addWorktree(cwd, options) {
   const { worktree, branch, base } = options;
-  ensureDir(path.dirname(worktree));
-  const existing = worktreeList(cwd).find((entry) => entry.worktree === worktree);
+  const target = path.resolve(worktree);
+  ensureDir(path.dirname(target));
+  const existing = worktreeList(cwd).find((entry) => samePath(entry.worktree, target));
   if (existing) {
     return { created: false, reusedBranch: Boolean(existing.branch) };
   }
   if (branchExists(cwd, branch)) {
-    git(["worktree", "add", worktree, branch], { cwd });
+    git(["worktree", "add", target, branch], { cwd });
     return { created: true, reusedBranch: true };
   }
-  git(["worktree", "add", "-b", branch, worktree, base], { cwd });
+  git(["worktree", "add", "-b", branch, target, base], { cwd });
   return { created: true, reusedBranch: false };
 }
 

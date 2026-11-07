@@ -17,7 +17,7 @@ export function findRepo(cwd) {
     );
   }
 
-  const root = git(["rev-parse", "--show-toplevel"], { cwd });
+  const root = path.resolve(git(["rev-parse", "--show-toplevel"], { cwd }));
   const gitDir = absolute(cwd, git(["rev-parse", "--git-dir"], { cwd }));
   const commonDir = absolute(cwd, git(["rev-parse", "--git-common-dir"], { cwd }));
 
@@ -28,7 +28,7 @@ export function findRepo(cwd) {
       .split(/\r?\n/)
       .find((line) => line.startsWith("worktree "));
     if (first) {
-      mainRoot = first.slice("worktree ".length);
+      mainRoot = path.resolve(first.slice("worktree ".length));
     }
   }
 
@@ -51,7 +51,9 @@ export function findRepo(cwd) {
     }
   }
   if (!baseBranch) {
-    baseBranch = gitOrNull(["branch", "--show-current"], { cwd });
+    // Inside a task worktree the current branch is the task branch, not the
+    // base. The main worktree is the stable place to read the fallback from.
+    baseBranch = gitOrNull(["branch", "--show-current"], { cwd: mainRoot });
   }
   if (!baseBranch) {
     for (const candidate of ["main", "master"]) {
