@@ -1,7 +1,7 @@
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { validateConfig } from "./config.mjs";
-import { ghAuthStatus } from "./github.mjs";
+import { ghAuthStatus, ghExecutable, hasGh } from "./github.mjs";
 import { gitVersion } from "./git.mjs";
 import { planPath } from "./plan.mjs";
 import { isSchemaSupported } from "./schema.mjs";
@@ -14,7 +14,7 @@ import {
   taskFile,
 } from "./state.mjs";
 import { isTrusted } from "./trust.mjs";
-import { expandHome, readJsonSafe, which } from "./util.mjs";
+import { expandHome, readJsonSafe } from "./util.mjs";
 
 const LOCK_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -98,6 +98,24 @@ function schemaCheck(paths, activeId) {
   };
 }
 
+function gitHooksCheck(repo) {
+  const dir = path.join(repo.commonDir, "hooks");
+  let hooks = [];
+  try {
+    hooks = readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.endsWith(".sample"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    hooks = [];
+  }
+  return {
+    name: "gitHooks",
+    ok: hooks.length === 0,
+    detail: hooks.length === 0 ? "none" : hooks.join(", "),
+  };
+}
+
 export function runDoctor(repo, config, configError = null, env = process.env) {
   const checks = [];
 
@@ -115,13 +133,18 @@ export function runDoctor(repo, config, configError = null, env = process.env) {
     detail: version ?? "not found",
   });
 
-  const gh = which("gh", env);
+  checks.push(gitHooksCheck(repo));
+
+  const gh = ghExecutable(env);
+  const ghAvailable = hasGh(env);
   checks.push({
     name: "gh",
-    ok: Boolean(gh),
-    detail: gh ?? "not installed; PR creation will use a compare URL",
+    ok: ghAvailable,
+    detail: ghAvailable
+      ? gh
+      : "not installed; PR creation will use a compare URL",
   });
-  if (gh) {
+  if (ghAvailable) {
     const auth = ghAuthStatus(env);
     checks.push({
       name: "ghAuth",
