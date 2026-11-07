@@ -265,7 +265,7 @@ worktree 默认在 `~/.local/state/codeflow/worktrees/<repo>/<task>`。每个任
 ## 开发
 
 ```bash
-npm test                  # 129 个测试：临时仓库、fake gate、fake gh
+npm test                  # 130 个测试：临时仓库、fake gate、fake gh
 npm run check             # 对每个源文件执行 node --check
 claude plugin validate .  # manifest、commands、hooks、marketplace
 ```
