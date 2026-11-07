@@ -191,7 +191,7 @@ export function validateConfig(config) {
         errors.push(`${at}.tier must be fast, full, or live`);
       }
       if (!Array.isArray(entry.kinds) || entry.kinds.some((kind) => !KINDS.has(kind))) {
-        errors.push(`${at}.kinds must be an array of code, docs, infra, or test`);
+        errors.push(`${at}.kinds must be an array of code, docs, infra, test, or mixed`);
       }
       if (typeof entry.required !== "boolean") {
         errors.push(`${at}.required must be a boolean`);
