@@ -6,6 +6,7 @@ import { scanAttention } from "../src/attention.mjs";
 import { defaultConfig } from "../src/config.mjs";
 import {
   buildEvidence,
+  evidenceBindingHash,
   gitTreeHash,
   isFresh,
   renderEvidence,
@@ -131,4 +132,38 @@ test("writeEvidence writes JSON and Markdown", (t) => {
   );
   assert.match(markdown, /Result: pass/);
   assert.match(markdown, /\| test \| fast \| yes \| 0 \| 10ms \|/);
+});
+
+test("evidence binding ignores timestamps, durations, logs, and tails", (t) => {
+  const context = setup(t);
+  const evidence = build(context);
+  const sameFacts = {
+    ...evidence,
+    startedAt: "2026-10-27T00:00:00Z",
+    finishedAt: "2026-10-27T00:00:10Z",
+    gates: evidence.gates.map((gate) => ({
+      ...gate,
+      durationMs: 9999,
+      logPath: "elsewhere.log",
+      tail: "different output",
+    })),
+  };
+
+  assert.equal(
+    evidenceBindingHash(evidence),
+    evidenceBindingHash(sameFacts),
+  );
+
+  const failedGate = {
+    ...sameFacts,
+    gates: sameFacts.gates.map((gate) => ({ ...gate, exitCode: 1 })),
+  };
+  assert.notEqual(
+    evidenceBindingHash(evidence),
+    evidenceBindingHash(failedGate),
+  );
+  assert.notEqual(
+    evidenceBindingHash(evidence),
+    evidenceBindingHash({ ...sameFacts, dirty: true }),
+  );
 });

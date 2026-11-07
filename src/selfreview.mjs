@@ -1,5 +1,5 @@
 import { CodedError, ERROR_CODES } from "./contracts.mjs";
-import { evidenceHash, readEvidence } from "./evidence.mjs";
+import { evidenceBindingHash, readEvidence } from "./evidence.mjs";
 import { git } from "./git.mjs";
 import { planStateHash, readPlan } from "./plan.mjs";
 import { assertSchema } from "./schema.mjs";
@@ -109,7 +109,7 @@ export function buildReviewPacket(options) {
     schemaVersion: 1,
     taskId: task.id,
     diffHash: diffHash(cwd, base),
-    evidenceHash: evidenceHash(evidence),
+    evidenceHash: evidenceBindingHash(evidence),
     planHash: planStateHash(plan),
     reviewedBy: null,
     reviewedAt: null,
@@ -164,7 +164,7 @@ export function approveSelfReview(paths, task, options) {
   }
 
   const currentDiff = diffHash(cwd, base);
-  const currentEvidence = evidenceHash(evidence);
+  const currentEvidence = evidenceBindingHash(evidence);
   if (review.diffHash !== currentDiff) {
     throw new CodedError(
       ERROR_CODES.APPROVAL_STALE,
@@ -229,7 +229,7 @@ export function selfReviewFresh(paths, task, options) {
   if (review.diffHash !== diff) {
     return { review, fresh: false, reason: "diff changed" };
   }
-  if (review.evidenceHash !== evidenceHash(evidence)) {
+  if (review.evidenceHash !== evidenceBindingHash(evidence)) {
     return { review, fresh: false, reason: "evidence changed" };
   }
   let plan;
