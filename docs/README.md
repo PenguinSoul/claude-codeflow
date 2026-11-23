@@ -8,6 +8,7 @@ approval checklist for the current design.
 | [`goal-and-requirements.md`](goal-and-requirements.md) | What codeflow is, who it serves, the human boundary, non-goals, success metrics, failure modes |
 | [`architecture.md`](architecture.md) | Topology, ownership, module map, numbered decisions, invariants, state machine, trust, evidence, safety, testing |
 | [`contracts.md`](contracts.md) | The JSON wire: envelope, exit codes, errors, and every artifact schema |
+| [`agent-team.md`](agent-team.md) | Optional prompt protocol for external agent-team orchestrators; no second scheduler or state owner |
 | [`DESIGN.md`](DESIGN.md) | The readable integrated design: flow, commands, artifacts, plugin surface, implementation order |
 
 ## Reading order

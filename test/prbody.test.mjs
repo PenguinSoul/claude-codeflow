@@ -139,7 +139,8 @@ test("renderPrBody fills sections from artifacts and only ticks evidence-backed 
 
 test("the repository template renders without placeholders", () => {
   // `pr.template` points at this file; a missing or stale template used to leave
-  // a TODO and an empty checklist in every pull request body.
+  // a TODO and an empty checklist in every pull request body. Rendered with
+  // `screenshots: "none"` so the assertions hold for any shipped template.
   const body = renderPrBody({
     template: readFileSync(
       join(repoRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
@@ -149,15 +150,16 @@ test("the repository template renders without placeholders", () => {
     taskSpec,
     plan,
     evidence,
-    config: { pr: { screenshots: "manual", titlePrefix: "" } },
+    config: { pr: { screenshots: "none", titlePrefix: "" } },
     review,
     diffStatText: "1 file changed",
   });
 
   assert.doesNotMatch(body, /TODO/);
+  assert.doesNotMatch(body, /^old$/m);
   assert.match(body, /\| test \| fast \| yes \| pass \| 12ms \|/);
-  assert.match(body, /- \[x\] test/);
-  assert.match(body, /- \[ \] check/);
+  assert.match(body, /- \[x\][^\n]*\btest/);
+  assert.doesNotMatch(body, /- \[ \][^\n]*\btest/);
   assert.match(body, /Stop the redirect loop\./);
 });
 
@@ -174,6 +176,39 @@ test("an empty gate list says no gates ran instead of an empty table", () => {
   });
 
   assert.match(body, /\| _\(none\)_ \| — \| — \| no gates ran \| — \|/);
+});
+
+test("screenshots: none renders the no-frontend sentence, not a TODO", () => {
+  const body = renderPrBody({
+    template,
+    task,
+    taskSpec,
+    plan,
+    evidence,
+    config: { pr: { screenshots: "none", titlePrefix: "" } },
+    review,
+    diffStatText: "",
+  });
+
+  assert.match(body, /Not applicable — no frontend changes\./);
+  assert.doesNotMatch(body, /TODO: add before\/after screenshots/);
+});
+
+test("screenshots: a command names the capture step", () => {
+  const body = renderPrBody({
+    template,
+    task,
+    taskSpec,
+    plan,
+    evidence,
+    config: {
+      pr: { screenshots: { command: "npm run shots" }, titlePrefix: "" },
+    },
+    review,
+    diffStatText: "",
+  });
+
+  assert.match(body, /Capture with `npm run shots`/);
 });
 
 test("a missing template falls back to the default shape", () => {
